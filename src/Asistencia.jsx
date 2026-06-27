@@ -1,36 +1,3 @@
-Skip to content
-Olivio1978
-jragrocontrol
-Repository navigation
-Code
-Issues
-Pull requests
-Agents
-Actions
-Projects
-Wiki
-Security and quality
-Insights
-Settings
-jragrocontrol
-/Asistencia.jsx
-Go to file
-t
-T
-Olivio1978
-Olivio1978
-Add files via upload
-4b42226
- · 
-last week
-735 lines (694 loc) · 22.5 KB
-jragrocontrol
-/Asistencia.jsx
-
-Code
-
-Blame
-function DetalleModal({ empleado, tipoEmpleo, registro, onUpdate, onClose, puedeEditar }) {
 import { useState, useMemo } from "react";
 
 // ============ DATOS DE PRUEBA ============
@@ -766,4 +733,3 @@ const styles = {
     cursor: "pointer",
   },
 };
- jragrocontrol/Asistencia.jsx at main · Olivio1978/jragrocontrol
