@@ -1,37 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { supabase } from "./lib/supabaseClient";
 
-// ============ DATOS DE PRUEBA ============
-const ranchosPrueba = [
-  { id: 1, nombre: "El Milagro - Zarzamora", parcela: "Parcela 1" },
-  { id: 2, nombre: "El Milagro - Frambuesa Sunset", parcela: "Parcela 2A" },
-  { id: 3, nombre: "El Milagro - Frambuesa Driscoll", parcela: "Parcela 2B" },
-];
-
-const tiposEmpleoPrueba = {
-  1: { nombre: "Labores", color: "#7fbf5a", horaEntrada: "07:00", tolerancia: 15 },
-  2: { nombre: "Corte", color: "#e8a23d", horaEntrada: "06:00", tolerancia: 15 },
-  3: { nombre: "Empaque", color: "#5a9bd4", horaEntrada: "08:00", tolerancia: 15 },
-  4: { nombre: "Fumigadores", color: "#c468d4", horaEntrada: "06:30", tolerancia: 15 },
-};
-
-// Simulación del usuario actual — esto vendrá del login en el futuro
-const usuarioActual = { nombre: "Olivio Jiménez", rol: "admin" }; // cambia a "encargado" para probar la restricción
-
-const empleadosPrueba = [
-  { id: 1, nombre: "Juan Pérez Hernández", ranchoId: 1, tipoEmpleoId: 1 },
-  { id: 2, nombre: "María López Sánchez", ranchoId: 1, tipoEmpleoId: 1 },
-  { id: 3, nombre: "Roberto Gómez Díaz", ranchoId: 1, tipoEmpleoId: 4 },
-  { id: 4, nombre: "Antonia Reyes Cruz", ranchoId: 2, tipoEmpleoId: 2 },
-  { id: 5, nombre: "Carlos Mendoza Ruiz", ranchoId: 2, tipoEmpleoId: 2 },
-  { id: 6, nombre: "Lucía Fernández Ortiz", ranchoId: 2, tipoEmpleoId: 2 },
-  { id: 7, nombre: "Pedro Ramírez Soto", ranchoId: 2, tipoEmpleoId: 1 },
-  { id: 8, nombre: "Guadalupe Torres Vega", ranchoId: 2, tipoEmpleoId: 3 },
-  { id: 9, nombre: "Miguel Ángel Castro", ranchoId: 3, tipoEmpleoId: 2 },
-  { id: 10, nombre: "Esperanza Jiménez Luna", ranchoId: 3, tipoEmpleoId: 2 },
-  { id: 11, nombre: "Francisco Morales Rey", ranchoId: 3, tipoEmpleoId: 1 },
-  { id: 12, nombre: "Rosa Elena Vázquez", ranchoId: 3, tipoEmpleoId: 3 },
-];
-
+// ============ CONSTANTES DE UI (idénticas al prototipo original) ============
 const INCIDENCIAS = [
   { value: "ninguna", label: "Asistió", color: "#7fbf5a", icon: "✓" },
   { value: "falta", label: "Falta", color: "#e05c5c", icon: "✕" },
@@ -58,6 +28,8 @@ function nowTime() {
   return d.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
+// Réplica de la regla de negocio para reflejar tardanza al instante en pantalla.
+// El servidor recalcula lo mismo como fuente de verdad (trigger calcular_tardanza_asistencia).
 function esTardanza(horaEntrada, tolerancia, horaActual) {
   const [hE, mE] = horaEntrada.split(":").map(Number);
   const [hA, mA] = horaActual.split(":").map(Number);
@@ -66,20 +38,192 @@ function esTardanza(horaEntrada, tolerancia, horaActual) {
   return actualMin > limiteMin;
 }
 
+// ============ PANTALLA DE ACCESO ============
+function Login() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [cargando, setCargando] = useState(false);
+
+  const ingresar = async (e) => {
+    e.preventDefault();
+    setError("");
+    setCargando(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setCargando(false);
+    if (error) setError("Correo o contraseña incorrectos.");
+  };
+
+  return (
+    <div style={styles.page}>
+      <div style={{ ...styles.container, paddingTop: "60px" }}>
+        <div style={styles.eyebrow}>JR AGROCONTROL</div>
+        <h1 style={styles.title}>Iniciar sesión</h1>
+        <form onSubmit={ingresar} style={{ marginTop: "24px" }}>
+          <div style={styles.selectorGroup}>
+            <label style={styles.label}>Correo</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.select} required />
+          </div>
+          <div style={{ ...styles.selectorGroup, marginTop: "12px" }}>
+            <label style={styles.label}>Contraseña</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.select} required />
+          </div>
+          {error && <p style={{ color: "#e05c5c", fontSize: "12px", marginTop: "8px" }}>{error}</p>}
+          <button type="submit" disabled={cargando} style={{ ...styles.guardarBtn, marginTop: "20px" }}>
+            {cargando ? "Ingresando…" : "Ingresar"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function Asistencia() {
-  const [ranchoId, setRanchoId] = useState(1);
+  // ---- Sesión y perfil ----
+  const [sesion, setSesion] = useState(undefined); // undefined = verificando, null = sin sesión
+  const [usuarioActual, setUsuarioActual] = useState(null); // { nombre, rol, rancho_id }
+
+  // ---- Catálogos desde Supabase ----
+  const [ranchos, setRanchos] = useState([]);
+  const [infoTipoEmpleo, setInfoTipoEmpleo] = useState({}); // { [tipoEmpleoId]: { nombre, color, horaEntrada, tolerancia } }
+  const [empleadosDelRancho, setEmpleadosDelRancho] = useState([]);
+
+  // ---- Estado de la pantalla ----
+  const [ranchoId, setRanchoId] = useState(null);
   const [fecha, setFecha] = useState(todayISO());
-  const [registros, setRegistros] = useState({}); // { empleadoId: { incidencia, jornada, observaciones } }
+  const [registros, setRegistros] = useState({});
   const [empleadoDetalle, setEmpleadoDetalle] = useState(null);
   const [guardado, setGuardado] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [cargandoDatos, setCargandoDatos] = useState(true);
+  const [errorCarga, setErrorCarga] = useState("");
 
-  const empleadosDelRancho = useMemo(
-    () => empleadosPrueba.filter((e) => e.ranchoId === ranchoId),
-    [ranchoId]
-  );
+  // ---- 1. Sesión ----
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSesion(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => setSesion(s));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // ---- 1.b Reinicio de estado al cambiar de usuario ----
+  // Corrige un caso real detectado en campo: si se cierra sesión y se entra
+  // con otra cuenta (ej. admin -> encargado) SIN recargar la página, el
+  // estado de React conservaba datos del usuario anterior (rancho, empleados,
+  // marcas). Esto provocaba selector de rancho vacío y rechazo por RLS al
+  // guardar, porque el rancho "atorado" en pantalla no correspondía al
+  // usuario real. Este efecto limpia todo en cuanto detecta un cambio de
+  // identidad (incluyendo logout), garantizando una sesión limpia cada vez.
+  useEffect(() => {
+    setUsuarioActual(null);
+    setRanchoId(null);
+    setRanchos([]);
+    setInfoTipoEmpleo({});
+    setEmpleadosDelRancho([]);
+    setRegistros({});
+    setEmpleadoDetalle(null);
+    setGuardado(false);
+    setErrorCarga("");
+    setFecha(todayISO());
+  }, [sesion?.user?.id]);
+
+  // ---- 2. Perfil (rol y rancho asignado) ----
+  useEffect(() => {
+    if (!sesion) return;
+    supabase
+      .from("usuarios")
+      .select("nombre_completo, rol, rancho_id")
+      .eq("id", sesion.user.id)
+      .single()
+      .then(({ data, error }) => {
+        if (error || !data) {
+          setErrorCarga("Tu usuario no tiene perfil asignado. Pide a un administrador que te dé de alta en 'usuarios'.");
+          return;
+        }
+        setUsuarioActual({ nombre: data.nombre_completo, rol: data.rol, rancho_id: data.rancho_id });
+        if (data.rancho_id) setRanchoId(data.rancho_id);
+      });
+  }, [sesion]);
+
+  // ---- 3. Catálogo de ranchos (RLS ya filtra: encargado solo ve el suyo) ----
+  useEffect(() => {
+    if (!usuarioActual) return;
+    supabase
+      .from("ranchos")
+      .select("id, nombre, cultivo, ubicacion")
+      .eq("activo", true)
+      .then(({ data, error }) => {
+        if (error) { setErrorCarga(error.message); return; }
+        setRanchos(data || []);
+        setRanchoId((prev) => prev || (data && data[0]?.id) || null);
+      });
+  }, [usuarioActual]);
+
+  // ---- 4. Tipos de empleo + horario configurado para el rancho activo ----
+  useEffect(() => {
+    if (!ranchoId) return;
+    supabase
+      .from("rancho_tipo_empleo")
+      .select("hora_entrada, tolerancia_minutos, tipos_empleo(id, nombre, color)")
+      .eq("rancho_id", ranchoId)
+      .eq("activo", true)
+      .then(({ data, error }) => {
+        if (error) { setErrorCarga(error.message); return; }
+        const info = {};
+        (data || []).forEach((row) => {
+          const t = row.tipos_empleo;
+          info[t.id] = {
+            nombre: t.nombre,
+            color: t.color,
+            horaEntrada: row.hora_entrada?.slice(0, 5),
+            tolerancia: row.tolerancia_minutos,
+          };
+        });
+        setInfoTipoEmpleo(info);
+      });
+  }, [ranchoId]);
+
+  // ---- 5. Empleados del rancho activo ----
+  useEffect(() => {
+    if (!ranchoId) return;
+    supabase
+      .from("empleados")
+      .select("id, nombre_completo, tipo_empleo_id")
+      .eq("rancho_id", ranchoId)
+      .eq("activo", true)
+      .order("nombre_completo")
+      .then(({ data, error }) => {
+        if (error) { setErrorCarga(error.message); return; }
+        setEmpleadosDelRancho(data || []);
+      });
+  }, [ranchoId]);
+
+  // ---- 6. Asistencia existente para rancho + fecha ----
+  useEffect(() => {
+    if (!ranchoId || !fecha) return;
+    setCargandoDatos(true);
+    supabase
+      .from("asistencia")
+      .select("empleado_id, incidencia, jornada, observaciones, hora_registro")
+      .eq("rancho_id", ranchoId)
+      .eq("fecha", fecha)
+      .then(({ data, error }) => {
+        setCargandoDatos(false);
+        if (error) { setErrorCarga(error.message); return; }
+        const mapa = {};
+        (data || []).forEach((r) => {
+          mapa[r.empleado_id] = {
+            incidencia: r.incidencia,
+            jornada: r.jornada,
+            observaciones: r.observaciones || "",
+            horaRegistro: r.hora_registro?.slice(0, 5) || null,
+          };
+        });
+        setRegistros(mapa);
+      });
+  }, [ranchoId, fecha]);
 
   const esHoy = fecha === todayISO();
-  const puedeEditar = usuarioActual.rol === "admin" || esHoy;
+  const puedeEditar = usuarioActual?.rol === "admin" || esHoy;
 
   const getRegistro = (empleadoId) =>
     registros[empleadoId] || { incidencia: null, jornada: "completa", observaciones: "", horaRegistro: null };
@@ -89,11 +233,10 @@ export default function Asistencia() {
     let incidenciaFinal = incidencia;
     const horaRegistro = nowTime();
 
-    // Si marca "asistió" en el día actual, evaluamos tardanza automática
     if (incidencia === "ninguna" && esHoy) {
-      const emp = empleadosPrueba.find((e) => e.id === empleadoId);
-      const tipo = tiposEmpleoPrueba[emp.tipoEmpleoId];
-      if (esTardanza(tipo.horaEntrada, tipo.tolerancia, horaRegistro)) {
+      const emp = empleadosDelRancho.find((e) => e.id === empleadoId);
+      const info = infoTipoEmpleo[emp?.tipo_empleo_id];
+      if (info && esTardanza(info.horaEntrada, info.tolerancia, horaRegistro)) {
         incidenciaFinal = "tardanza";
       }
     }
@@ -112,8 +255,8 @@ export default function Asistencia() {
     empleadosDelRancho.forEach((e) => {
       let incidenciaFinal = incidencia;
       if (incidencia === "ninguna" && esHoy) {
-        const tipo = tiposEmpleoPrueba[e.tipoEmpleoId];
-        if (esTardanza(tipo.horaEntrada, tipo.tolerancia, horaRegistro)) {
+        const info = infoTipoEmpleo[e.tipo_empleo_id];
+        if (info && esTardanza(info.horaEntrada, info.tolerancia, horaRegistro)) {
           incidenciaFinal = "tardanza";
         }
       }
@@ -142,12 +285,79 @@ export default function Asistencia() {
     return t;
   }, [empleadosDelRancho, registros]);
 
-  const guardarTodo = () => {
+  // ---- Guardar: sube en un solo lote los registros marcados en esta sesión ----
+  const guardarTodo = async () => {
+    const filas = empleadosDelRancho
+      .filter((e) => registros[e.id]?.incidencia)
+      .map((e) => ({
+        empleado_id: e.id,
+        fecha,
+        hora_registro: registros[e.id].horaRegistro,
+        incidencia: registros[e.id].incidencia,
+        jornada: registros[e.id].jornada || "completa",
+        observaciones: registros[e.id].observaciones || null,
+      }));
+
+    if (filas.length === 0) return;
+
+    setGuardando(true);
+    const { data, error } = await supabase
+      .from("asistencia")
+      .upsert(filas, { onConflict: "empleado_id,fecha" })
+      .select("empleado_id, incidencia, jornada, observaciones, hora_registro");
+    setGuardando(false);
+
+    if (error) {
+      setErrorCarga("No se pudo guardar (revisa tu conexión): " + error.message);
+      return;
+    }
+
+    // Sincroniza con los valores confirmados por el servidor (ej. tardanza recalculada)
+    const mapa = { ...registros };
+    (data || []).forEach((r) => {
+      mapa[r.empleado_id] = {
+        incidencia: r.incidencia,
+        jornada: r.jornada,
+        observaciones: r.observaciones || "",
+        horaRegistro: r.hora_registro?.slice(0, 5) || null,
+      };
+    });
+    setRegistros(mapa);
     setGuardado(true);
+    setErrorCarga("");
     setTimeout(() => setGuardado(false), 2500);
   };
 
-  const ranchoActual = ranchosPrueba.find((r) => r.id === ranchoId);
+  const ranchoActual = ranchos.find((r) => r.id === ranchoId);
+
+  // Cierra la sesión de forma explícita. Es la vía correcta para cambiar de
+  // usuario: dispara onAuthStateChange -> limpia el estado (ver efecto 1.b)
+  // sin depender de que la persona recuerde recargar la página manualmente.
+  const cerrarSesion = async () => {
+    await supabase.auth.signOut();
+  };
+
+  // ---- Estados de carga / acceso ----
+  if (sesion === undefined) {
+    return <div style={styles.page}><div style={styles.container}>Cargando…</div></div>;
+  }
+  if (!sesion) {
+    return <Login />;
+  }
+  if (!usuarioActual) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.container}>
+          <p>{errorCarga || "Cargando perfil…"}</p>
+          {errorCarga && (
+            <button onClick={cerrarSesion} style={{ ...styles.guardarBtn, marginTop: "16px" }}>
+              Cerrar sesión
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.page}>
@@ -160,37 +370,43 @@ export default function Asistencia() {
             <h1 style={styles.title}>Control de Asistencia</h1>
             <div style={styles.usuarioTag}>
               {usuarioActual.nombre} · <span style={{ textTransform: "capitalize" }}>{usuarioActual.rol}</span>
+              {" · "}
+              <button onClick={cerrarSesion} style={styles.logoutLink}>Cerrar sesión</button>
             </div>
           </div>
           <div style={styles.headerIcon}>👷</div>
         </div>
+
+        {errorCarga && (
+          <div style={{ ...styles.avisoRestriccion, borderColor: "rgba(224,92,92,0.3)", background: "rgba(224,92,92,0.12)", color: "#e05c5c" }}>
+            {errorCarga}
+          </div>
+        )}
 
         {/* Selectores */}
         <div style={styles.selectorsCard}>
           <div style={styles.selectorGroup}>
             <label style={styles.label}>Rancho</label>
             <select
-              value={ranchoId}
-              onChange={(e) => setRanchoId(Number(e.target.value))}
+              value={ranchoId || ""}
+              onChange={(e) => setRanchoId(e.target.value)}
               style={styles.select}
+              disabled={usuarioActual.rol !== "admin" && !!usuarioActual.rancho_id}
             >
-              {ranchosPrueba.map((r) => (
+              {ranchos.map((r) => (
                 <option key={r.id} value={r.id}>{r.nombre}</option>
               ))}
             </select>
           </div>
           <div style={styles.selectorGroup}>
             <label style={styles.label}>Fecha</label>
-            <input
-              type="date"
-              value={fecha}
-              onChange={(e) => setFecha(e.target.value)}
-              style={styles.select}
-            />
+            <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={styles.select} />
           </div>
         </div>
 
-        <div style={styles.fechaTexto}>{formatFecha(fecha)}</div>
+        <div style={styles.fechaTexto}>
+          {formatFecha(fecha)}{cargandoDatos ? " · cargando…" : ""}
+        </div>
 
         {!puedeEditar && (
           <div style={styles.avisoRestriccion}>
@@ -228,15 +444,15 @@ export default function Asistencia() {
         <div style={{ ...styles.lista, opacity: puedeEditar ? 1 : 0.6 }}>
           {empleadosDelRancho.map((emp) => {
             const reg = getRegistro(emp.id);
-            const tipoEmpleo = tiposEmpleoPrueba[emp.tipoEmpleoId];
+            const tipoEmpleo = infoTipoEmpleo[emp.tipo_empleo_id] || { nombre: "—", color: "#999" };
             return (
               <div key={emp.id} style={styles.empleadoRow}>
                 <div style={styles.empleadoInfo} onClick={() => setEmpleadoDetalle(emp.id)}>
                   <div style={{ ...styles.avatar, background: tipoEmpleo.color + "30", color: tipoEmpleo.color }}>
-                    {emp.nombre.split(" ").map(n => n[0]).slice(0, 2).join("")}
+                    {emp.nombre_completo.split(" ").map((n) => n[0]).slice(0, 2).join("")}
                   </div>
                   <div>
-                    <div style={styles.empleadoNombre}>{emp.nombre}</div>
+                    <div style={styles.empleadoNombre}>{emp.nombre_completo}</div>
                     <div style={{ ...styles.empleadoTipo, color: tipoEmpleo.color }}>
                       {tipoEmpleo.nombre}
                       {reg.incidencia === "tardanza" && " · llegó tarde"}
@@ -270,25 +486,25 @@ export default function Asistencia() {
             );
           })}
 
-          {empleadosDelRancho.length === 0 && (
+          {!cargandoDatos && empleadosDelRancho.length === 0 && (
             <div style={styles.empty}>No hay empleados registrados en {ranchoActual?.nombre}</div>
           )}
         </div>
 
         {/* Botón guardar */}
-        <button onClick={guardarTodo} style={styles.guardarBtn}>
-          {guardado ? "✓ Asistencia guardada" : "Guardar asistencia del día"}
+        <button onClick={guardarTodo} disabled={guardando} style={styles.guardarBtn}>
+          {guardando ? "Guardando…" : guardado ? "✓ Asistencia guardada" : "Guardar asistencia del día"}
         </button>
         <p style={styles.footerNote}>
-          {empleadosDelRancho.length} empleados · {ranchoActual?.parcela}
+          {empleadosDelRancho.length} empleados{ranchoActual?.ubicacion ? ` · ${ranchoActual.ubicacion}` : ""}
         </p>
       </div>
 
       {/* Modal de detalle */}
       {empleadoDetalle && (
         <DetalleModal
-          empleado={empleadosPrueba.find((e) => e.id === empleadoDetalle)}
-          tipoEmpleo={tiposEmpleoPrueba[empleadosPrueba.find((e) => e.id === empleadoDetalle).tipoEmpleoId]}
+          empleado={empleadosDelRancho.find((e) => e.id === empleadoDetalle)}
+          tipoEmpleo={infoTipoEmpleo[empleadosDelRancho.find((e) => e.id === empleadoDetalle)?.tipo_empleo_id] || { nombre: "—", color: "#999", horaEntrada: "--:--", tolerancia: 0 }}
           registro={getRegistro(empleadoDetalle)}
           onUpdate={(campo, valor) => actualizarDetalle(empleadoDetalle, campo, valor)}
           onClose={() => setEmpleadoDetalle(null)}
@@ -315,9 +531,9 @@ function DetalleModal({ empleado, tipoEmpleo, registro, onUpdate, onClose, puede
         <button style={styles.modalClose} onClick={onClose}>✕</button>
 
         <div style={{ ...styles.modalAvatar, background: tipoEmpleo.color + "30", color: tipoEmpleo.color }}>
-          {empleado.nombre.split(" ").map(n => n[0]).slice(0, 2).join("")}
+          {empleado.nombre_completo.split(" ").map((n) => n[0]).slice(0, 2).join("")}
         </div>
-        <h2 style={styles.modalNombre}>{empleado.nombre}</h2>
+        <h2 style={styles.modalNombre}>{empleado.nombre_completo}</h2>
         <div style={{ ...styles.modalTipo, color: tipoEmpleo.color }}>{tipoEmpleo.nombre}</div>
         <div style={styles.modalHorario}>
           Entrada: {tipoEmpleo.horaEntrada} hrs · Tolerancia: {tipoEmpleo.tolerancia} min
@@ -404,36 +620,21 @@ const styles = {
     padding: "20px 16px 40px",
     boxSizing: "border-box",
   },
-  container: {
-    maxWidth: "640px",
-    margin: "0 auto",
-  },
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "20px",
-  },
-  eyebrow: {
+  container: { maxWidth: "640px", margin: "0 auto" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" },
+  eyebrow: { fontSize: "11px", letterSpacing: "0.12em", color: "#7fbf5a", marginBottom: "4px", fontWeight: "600" },
+  title: { fontSize: "26px", fontWeight: "800", margin: 0, color: "#ffffff" },
+  headerIcon: { fontSize: "36px" },
+  usuarioTag: { fontSize: "11px", color: "rgba(200,230,180,0.45)", marginTop: "4px" },
+  logoutLink: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: "#e8a23d",
     fontSize: "11px",
-    letterSpacing: "0.12em",
-    color: "#7fbf5a",
-    marginBottom: "4px",
-    fontWeight: "600",
-  },
-  title: {
-    fontSize: "26px",
-    fontWeight: "800",
-    margin: 0,
-    color: "#ffffff",
-  },
-  headerIcon: {
-    fontSize: "36px",
-  },
-  usuarioTag: {
-    fontSize: "11px",
-    color: "rgba(200,230,180,0.45)",
-    marginTop: "4px",
+    textDecoration: "underline",
+    cursor: "pointer",
+    fontFamily: "inherit",
   },
   avisoRestriccion: {
     background: "rgba(232,162,61,0.12)",
@@ -454,17 +655,8 @@ const styles = {
     gap: "12px",
     marginBottom: "12px",
   },
-  selectorGroup: {
-    flex: 1,
-  },
-  label: {
-    display: "block",
-    fontSize: "11px",
-    letterSpacing: "0.08em",
-    color: "#7fbf5a",
-    marginBottom: "6px",
-    fontWeight: "600",
-  },
+  selectorGroup: { flex: 1 },
+  label: { display: "block", fontSize: "11px", letterSpacing: "0.08em", color: "#7fbf5a", marginBottom: "6px", fontWeight: "600" },
   select: {
     width: "100%",
     background: "rgba(0,0,0,0.25)",
@@ -475,67 +667,16 @@ const styles = {
     fontSize: "14px",
     boxSizing: "border-box",
   },
-  fechaTexto: {
-    fontSize: "13px",
-    color: "rgba(200,230,180,0.5)",
-    textTransform: "capitalize",
-    marginBottom: "16px",
-    paddingLeft: "4px",
-  },
-  resumenRow: {
-    display: "flex",
-    gap: "8px",
-    marginBottom: "20px",
-    overflowX: "auto",
-    paddingBottom: "4px",
-  },
-  chip: {
-    flex: "1 0 auto",
-    minWidth: "70px",
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid",
-    borderRadius: "12px",
-    padding: "10px 12px",
-    textAlign: "center",
-  },
-  chipCount: {
-    fontSize: "20px",
-    fontWeight: "800",
-  },
-  chipLabel: {
-    fontSize: "10px",
-    color: "rgba(200,230,180,0.5)",
-    marginTop: "2px",
-  },
-  quickActions: {
-    marginBottom: "16px",
-  },
-  quickLabel: {
-    fontSize: "12px",
-    color: "rgba(200,230,180,0.5)",
-    marginBottom: "8px",
-    display: "block",
-  },
-  quickButtons: {
-    display: "flex",
-    gap: "8px",
-    flexWrap: "wrap",
-  },
-  quickBtn: {
-    background: "transparent",
-    border: "1.5px solid",
-    borderRadius: "999px",
-    padding: "7px 14px",
-    fontSize: "12px",
-    fontWeight: "600",
-    cursor: "pointer",
-  },
-  lista: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    marginBottom: "20px",
-  },
+  fechaTexto: { fontSize: "13px", color: "rgba(200,230,180,0.5)", textTransform: "capitalize", marginBottom: "16px", paddingLeft: "4px" },
+  resumenRow: { display: "flex", gap: "8px", marginBottom: "20px", overflowX: "auto", paddingBottom: "4px" },
+  chip: { flex: "1 0 auto", minWidth: "70px", background: "rgba(255,255,255,0.04)", border: "1px solid", borderRadius: "12px", padding: "10px 12px", textAlign: "center" },
+  chipCount: { fontSize: "20px", fontWeight: "800" },
+  chipLabel: { fontSize: "10px", color: "rgba(200,230,180,0.5)", marginTop: "2px" },
+  quickActions: { marginBottom: "16px" },
+  quickLabel: { fontSize: "12px", color: "rgba(200,230,180,0.5)", marginBottom: "8px", display: "block" },
+  quickButtons: { display: "flex", gap: "8px", flexWrap: "wrap" },
+  quickBtn: { background: "transparent", border: "1.5px solid", borderRadius: "999px", padding: "7px 14px", fontSize: "12px", fontWeight: "600", cursor: "pointer" },
+  lista: { display: "flex", flexDirection: "column", gap: "8px", marginBottom: "20px" },
   empleadoRow: {
     background: "rgba(255,255,255,0.04)",
     border: "1px solid rgba(255,255,255,0.08)",
@@ -546,57 +687,13 @@ const styles = {
     alignItems: "center",
     gap: "10px",
   },
-  empleadoInfo: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    cursor: "pointer",
-    flex: 1,
-    minWidth: 0,
-  },
-  avatar: {
-    width: "40px",
-    height: "40px",
-    borderRadius: "999px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "13px",
-    fontWeight: "700",
-    flexShrink: 0,
-  },
-  empleadoNombre: {
-    fontSize: "14px",
-    fontWeight: "600",
-    color: "#e8f5e0",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-  empleadoTipo: {
-    fontSize: "11px",
-    marginTop: "2px",
-  },
-  botonesIncidencia: {
-    display: "flex",
-    gap: "5px",
-    flexShrink: 0,
-  },
-  incBtn: {
-    width: "30px",
-    height: "30px",
-    borderRadius: "8px",
-    border: "1.5px solid",
-    fontSize: "12px",
-    fontWeight: "700",
-    cursor: "pointer",
-  },
-  empty: {
-    textAlign: "center",
-    padding: "40px 20px",
-    color: "rgba(200,230,180,0.4)",
-    fontSize: "13px",
-  },
+  empleadoInfo: { display: "flex", alignItems: "center", gap: "12px", cursor: "pointer", flex: 1, minWidth: 0 },
+  avatar: { width: "40px", height: "40px", borderRadius: "999px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: "700", flexShrink: 0 },
+  empleadoNombre: { fontSize: "14px", fontWeight: "600", color: "#e8f5e0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  empleadoTipo: { fontSize: "11px", marginTop: "2px" },
+  botonesIncidencia: { display: "flex", gap: "5px", flexShrink: 0 },
+  incBtn: { width: "30px", height: "30px", borderRadius: "8px", border: "1.5px solid", fontSize: "12px", fontWeight: "700", cursor: "pointer" },
+  empty: { textAlign: "center", padding: "40px 20px", color: "rgba(200,230,180,0.4)", fontSize: "13px" },
   guardarBtn: {
     width: "100%",
     background: "linear-gradient(135deg, #5aab2e, #3d8c1a)",
@@ -609,21 +706,8 @@ const styles = {
     cursor: "pointer",
     boxShadow: "0 4px 24px rgba(90,171,46,0.3)",
   },
-  footerNote: {
-    textAlign: "center",
-    fontSize: "11px",
-    color: "rgba(200,230,180,0.3)",
-    marginTop: "10px",
-  },
-  modalOverlay: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.6)",
-    display: "flex",
-    alignItems: "flex-end",
-    justifyContent: "center",
-    zIndex: 100,
-  },
+  footerNote: { textAlign: "center", fontSize: "11px", color: "rgba(200,230,180,0.3)", marginTop: "10px" },
+  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 100 },
   modal: {
     background: "linear-gradient(160deg, #1a3d25, #0f2818)",
     border: "1px solid rgba(127,191,90,0.25)",
@@ -636,78 +720,16 @@ const styles = {
     position: "relative",
     boxSizing: "border-box",
   },
-  modalClose: {
-    position: "absolute",
-    top: "16px",
-    right: "16px",
-    background: "rgba(255,255,255,0.08)",
-    border: "none",
-    borderRadius: "999px",
-    width: "32px",
-    height: "32px",
-    color: "#e8f5e0",
-    fontSize: "14px",
-    cursor: "pointer",
-  },
-  modalAvatar: {
-    width: "56px",
-    height: "56px",
-    borderRadius: "999px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "18px",
-    fontWeight: "700",
-    margin: "0 auto 12px",
-  },
-  modalNombre: {
-    fontSize: "18px",
-    fontWeight: "700",
-    textAlign: "center",
-    margin: "0 0 4px",
-    color: "#ffffff",
-  },
-  modalTipo: {
-    fontSize: "12px",
-    textAlign: "center",
-    fontWeight: "600",
-    marginBottom: "8px",
-  },
-  modalHorario: {
-    fontSize: "11px",
-    textAlign: "center",
-    color: "rgba(200,230,180,0.45)",
-    marginBottom: "24px",
-  },
-  modalSection: {
-    marginBottom: "20px",
-  },
-  modalIncidencias: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: "8px",
-  },
-  modalIncBtn: {
-    border: "1.5px solid",
-    borderRadius: "10px",
-    padding: "10px",
-    fontSize: "13px",
-    fontWeight: "600",
-    cursor: "pointer",
-  },
-  jornadaButtons: {
-    display: "flex",
-    gap: "8px",
-  },
-  jornadaBtn: {
-    flex: 1,
-    border: "1.5px solid",
-    borderRadius: "10px",
-    padding: "10px",
-    fontSize: "12px",
-    fontWeight: "600",
-    cursor: "pointer",
-  },
+  modalClose: { position: "absolute", top: "16px", right: "16px", background: "rgba(255,255,255,0.08)", border: "none", borderRadius: "999px", width: "32px", height: "32px", color: "#e8f5e0", fontSize: "14px", cursor: "pointer" },
+  modalAvatar: { width: "56px", height: "56px", borderRadius: "999px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", fontWeight: "700", margin: "0 auto 12px" },
+  modalNombre: { fontSize: "18px", fontWeight: "700", textAlign: "center", margin: "0 0 4px", color: "#ffffff" },
+  modalTipo: { fontSize: "12px", textAlign: "center", fontWeight: "600", marginBottom: "8px" },
+  modalHorario: { fontSize: "11px", textAlign: "center", color: "rgba(200,230,180,0.45)", marginBottom: "24px" },
+  modalSection: { marginBottom: "20px" },
+  modalIncidencias: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" },
+  modalIncBtn: { border: "1.5px solid", borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "600", cursor: "pointer" },
+  jornadaButtons: { display: "flex", gap: "8px" },
+  jornadaBtn: { flex: 1, border: "1.5px solid", borderRadius: "10px", padding: "10px", fontSize: "12px", fontWeight: "600", cursor: "pointer" },
   textarea: {
     width: "100%",
     background: "rgba(0,0,0,0.25)",
@@ -733,3 +755,4 @@ const styles = {
     cursor: "pointer",
   },
 };
+
