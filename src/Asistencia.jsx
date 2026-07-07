@@ -38,6 +38,18 @@ function esTardanza(horaEntrada, tolerancia, horaActual) {
   return actualMin > limiteMin;
 }
 
+// Misma lógica que esTardanza, mas en sentido inverso: se sale ANTES del
+// límite (hora de salida programada - tolerancia). El servidor recalcula lo
+// mismo como fuente de verdad (trigger calcular_salida_anticipada_asistencia).
+function esSalidaAnticipada(horaSalida, tolerancia, horaActual) {
+  if (!horaSalida) return false;
+  const [hS, mS] = horaSalida.split(":").map(Number);
+  const [hA, mA] = horaActual.split(":").map(Number);
+  const limiteMin = hS * 60 + mS - tolerancia;
+  const actualMin = hA * 60 + mA;
+  return actualMin < limiteMin;
+}
+
 // ============ PANTALLA DE ACCESO ============
 function Login() {
   const [email, setEmail] = useState("");
@@ -163,7 +175,7 @@ export default function Asistencia() {
     if (!ranchoId) return;
     supabase
       .from("rancho_tipo_empleo")
-      .select("hora_entrada, tolerancia_minutos, tipos_empleo(id, nombre, color)")
+      .select("hora_entrada, hora_salida, tolerancia_minutos, tipos_empleo(id, nombre, color)")
       .eq("rancho_id", ranchoId)
       .eq("activo", true)
       .then(({ data, error }) => {
@@ -175,6 +187,7 @@ export default function Asistencia() {
             nombre: t.nombre,
             color: t.color,
             horaEntrada: row.hora_entrada?.slice(0, 5),
+            horaSalida: row.hora_salida?.slice(0, 5),
             tolerancia: row.tolerancia_minutos,
           };
         });
@@ -203,7 +216,7 @@ export default function Asistencia() {
     setCargandoDatos(true);
     supabase
       .from("asistencia")
-      .select("empleado_id, incidencia, jornada, observaciones, hora_registro")
+      .select("empleado_id, incidencia, jornada, observaciones, hora_registro, hora_salida_real, salida_anticipada")
       .eq("rancho_id", ranchoId)
       .eq("fecha", fecha)
       .then(({ data, error }) => {
@@ -216,6 +229,8 @@ export default function Asistencia() {
             jornada: r.jornada,
             observaciones: r.observaciones || "",
             horaRegistro: r.hora_registro?.slice(0, 5) || null,
+            horaSalida: r.hora_salida_real?.slice(0, 5) || null,
+            salidaAnticipada: r.salida_anticipada || false,
           };
         });
         setRegistros(mapa);
@@ -226,7 +241,10 @@ export default function Asistencia() {
   const puedeEditar = usuarioActual?.rol === "admin" || esHoy;
 
   const getRegistro = (empleadoId) =>
-    registros[empleadoId] || { incidencia: null, jornada: "completa", observaciones: "", horaRegistro: null };
+    registros[empleadoId] || {
+      incidencia: null, jornada: "completa", observaciones: "",
+      horaRegistro: null, horaSalida: null, salidaAnticipada: false,
+    };
 
   const marcarRapido = (empleadoId, incidencia) => {
     if (!puedeEditar) return;
@@ -266,21 +284,63 @@ export default function Asistencia() {
     setGuardado(false);
   };
 
-  const actualizarDetalle = (empleadoId, campo, valor) => {
+  // Marca la hora de salida real de un empleado (toque individual, como
+  // haría el encargado al ver que esa persona se retira del rancho).
+  const marcarSalida = (empleadoId) => {
     if (!puedeEditar) return;
+    const horaSalida = nowTime();
+    const emp = empleadosDelRancho.find((e) => e.id === empleadoId);
+    const info = infoTipoEmpleo[emp?.tipo_empleo_id];
+    const salidaAnticipada = info ? esSalidaAnticipada(info.horaSalida, info.tolerancia, horaSalida) : false;
+
     setRegistros((prev) => ({
       ...prev,
-      [empleadoId]: { ...getRegistro(empleadoId), [campo]: valor },
+      [empleadoId]: { ...getRegistro(empleadoId), horaSalida, salidaAnticipada },
+    }));
+    setGuardado(false);
+  };
+
+  // Marca la salida de todos a la vez, para el cierre general del día.
+  const marcarSalidaTodos = () => {
+    if (!puedeEditar) return;
+    const horaSalida = nowTime();
+    const nuevos = {};
+    empleadosDelRancho.forEach((e) => {
+      const info = infoTipoEmpleo[e.tipo_empleo_id];
+      const salidaAnticipada = info ? esSalidaAnticipada(info.horaSalida, info.tolerancia, horaSalida) : false;
+      nuevos[e.id] = { ...getRegistro(e.id), horaSalida, salidaAnticipada };
+    });
+    setRegistros((prev) => ({ ...prev, ...nuevos }));
+    setGuardado(false);
+  };
+
+  const actualizarDetalle = (empleadoId, campo, valor) => {
+    if (!puedeEditar) return;
+    const actual = getRegistro(empleadoId);
+    let cambios = { [campo]: valor };
+
+    // Si se edita manualmente la hora de salida (ej. el admin la corrige al
+    // cierre de semana), recalcula la vista previa de salida anticipada.
+    if (campo === "horaSalida") {
+      const emp = empleadosDelRancho.find((e) => e.id === empleadoId);
+      const info = infoTipoEmpleo[emp?.tipo_empleo_id];
+      cambios.salidaAnticipada = valor && info ? esSalidaAnticipada(info.horaSalida, info.tolerancia, valor) : false;
+    }
+
+    setRegistros((prev) => ({
+      ...prev,
+      [empleadoId]: { ...actual, ...cambios },
     }));
     setGuardado(false);
   };
 
   const totales = useMemo(() => {
-    const t = { ninguna: 0, falta: 0, permiso: 0, tardanza: 0, sinMarcar: 0 };
+    const t = { ninguna: 0, falta: 0, permiso: 0, tardanza: 0, sinMarcar: 0, salidaAnticipada: 0 };
     empleadosDelRancho.forEach((e) => {
       const r = getRegistro(e.id);
       if (!r.incidencia) t.sinMarcar++;
       else t[r.incidencia]++;
+      if (r.salidaAnticipada) t.salidaAnticipada++;
     });
     return t;
   }, [empleadosDelRancho, registros]);
@@ -296,6 +356,7 @@ export default function Asistencia() {
         incidencia: registros[e.id].incidencia,
         jornada: registros[e.id].jornada || "completa",
         observaciones: registros[e.id].observaciones || null,
+        hora_salida_real: registros[e.id].horaSalida || null,
       }));
 
     if (filas.length === 0) return;
@@ -304,7 +365,7 @@ export default function Asistencia() {
     const { data, error } = await supabase
       .from("asistencia")
       .upsert(filas, { onConflict: "empleado_id,fecha" })
-      .select("empleado_id, incidencia, jornada, observaciones, hora_registro");
+      .select("empleado_id, incidencia, jornada, observaciones, hora_registro, hora_salida_real, salida_anticipada");
     setGuardando(false);
 
     if (error) {
@@ -312,7 +373,8 @@ export default function Asistencia() {
       return;
     }
 
-    // Sincroniza con los valores confirmados por el servidor (ej. tardanza recalculada)
+    // Sincroniza con los valores confirmados por el servidor (ej. tardanza
+    // y salida anticipada recalculadas por los triggers correspondientes)
     const mapa = { ...registros };
     (data || []).forEach((r) => {
       mapa[r.empleado_id] = {
@@ -320,6 +382,8 @@ export default function Asistencia() {
         jornada: r.jornada,
         observaciones: r.observaciones || "",
         horaRegistro: r.hora_registro?.slice(0, 5) || null,
+        horaSalida: r.hora_salida_real?.slice(0, 5) || null,
+        salidaAnticipada: r.salida_anticipada || false,
       };
     });
     setRegistros(mapa);
@@ -421,6 +485,7 @@ export default function Asistencia() {
           <ResumenChip label="Faltas" count={totales.falta} color="#e05c5c" />
           <ResumenChip label="Permiso" count={totales.permiso} color="#e8a23d" />
           <ResumenChip label="Tardanza" count={totales.tardanza} color="#5a9bd4" />
+          <ResumenChip label="Salida antes" count={totales.salidaAnticipada} color="#a08fd4" />
           <ResumenChip label="Sin marcar" count={totales.sinMarcar} color="rgba(255,255,255,0.3)" />
         </div>
 
@@ -437,6 +502,12 @@ export default function Asistencia() {
                 {inc.icon} {inc.label}
               </button>
             ))}
+            <button
+              onClick={marcarSalidaTodos}
+              style={{ ...styles.quickBtn, borderColor: "#a08fd4", color: "#a08fd4" }}
+            >
+              🚪 Marcar salida de todos
+            </button>
           </div>
         </div>
 
@@ -456,7 +527,9 @@ export default function Asistencia() {
                     <div style={{ ...styles.empleadoTipo, color: tipoEmpleo.color }}>
                       {tipoEmpleo.nombre}
                       {reg.incidencia === "tardanza" && " · llegó tarde"}
-                      {reg.horaRegistro && ` · ${reg.horaRegistro} hrs`}
+                      {reg.horaRegistro && ` · entró ${reg.horaRegistro} hrs`}
+                      {reg.horaSalida && ` · salió ${reg.horaSalida} hrs`}
+                      {reg.salidaAnticipada && " (antes de tiempo)"}
                       {reg.observaciones && " · con nota"}
                     </div>
                   </div>
@@ -481,6 +554,18 @@ export default function Asistencia() {
                       </button>
                     );
                   })}
+                  <button
+                    onClick={() => marcarSalida(emp.id)}
+                    style={{
+                      ...styles.incBtn,
+                      background: reg.horaSalida ? "#a08fd4" : "rgba(255,255,255,0.05)",
+                      color: reg.horaSalida ? "#0f2818" : "rgba(232,245,224,0.4)",
+                      borderColor: reg.horaSalida ? "#a08fd4" : "rgba(255,255,255,0.1)",
+                    }}
+                    title="Marcar salida"
+                  >
+                    🚪
+                  </button>
                 </div>
               </div>
             );
@@ -504,7 +589,7 @@ export default function Asistencia() {
       {empleadoDetalle && (
         <DetalleModal
           empleado={empleadosDelRancho.find((e) => e.id === empleadoDetalle)}
-          tipoEmpleo={infoTipoEmpleo[empleadosDelRancho.find((e) => e.id === empleadoDetalle)?.tipo_empleo_id] || { nombre: "—", color: "#999", horaEntrada: "--:--", tolerancia: 0 }}
+          tipoEmpleo={infoTipoEmpleo[empleadosDelRancho.find((e) => e.id === empleadoDetalle)?.tipo_empleo_id] || { nombre: "—", color: "#999", horaEntrada: "--:--", horaSalida: "--:--", tolerancia: 0 }}
           registro={getRegistro(empleadoDetalle)}
           onUpdate={(campo, valor) => actualizarDetalle(empleadoDetalle, campo, valor)}
           onClose={() => setEmpleadoDetalle(null)}
@@ -536,8 +621,8 @@ function DetalleModal({ empleado, tipoEmpleo, registro, onUpdate, onClose, puede
         <h2 style={styles.modalNombre}>{empleado.nombre_completo}</h2>
         <div style={{ ...styles.modalTipo, color: tipoEmpleo.color }}>{tipoEmpleo.nombre}</div>
         <div style={styles.modalHorario}>
-          Entrada: {tipoEmpleo.horaEntrada} hrs · Tolerancia: {tipoEmpleo.tolerancia} min
-          {registro.horaRegistro && ` · Registrado a las ${registro.horaRegistro} hrs`}
+          Entrada: {tipoEmpleo.horaEntrada} hrs · Salida: {tipoEmpleo.horaSalida} hrs · Tolerancia: {tipoEmpleo.tolerancia} min
+          {registro.horaRegistro && ` · Entró a las ${registro.horaRegistro} hrs`}
         </div>
 
         <div style={styles.modalSection}>
@@ -592,6 +677,22 @@ function DetalleModal({ empleado, tipoEmpleo, registro, onUpdate, onClose, puede
             </div>
           </div>
         ) : null}
+
+        <div style={styles.modalSection}>
+          <label style={styles.label}>Hora de salida real</label>
+          <input
+            type="time"
+            value={registro.horaSalida || ""}
+            disabled={!puedeEditar}
+            onChange={(e) => onUpdate("horaSalida", e.target.value)}
+            style={styles.select}
+          />
+          {registro.salidaAnticipada && (
+            <p style={{ color: "#a08fd4", fontSize: "11px", marginTop: "6px" }}>
+              🚪 Se retiró antes de la hora programada.
+            </p>
+          )}
+        </div>
 
         <div style={styles.modalSection}>
           <label style={styles.label}>Observaciones</label>
@@ -755,4 +856,5 @@ const styles = {
     cursor: "pointer",
   },
 };
+
 
