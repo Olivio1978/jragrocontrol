@@ -2,11 +2,13 @@ import { useState } from "react";
 import Asistencia from "./src/Asistencia";
 import Labores from "./src/Labores";
 import Empleados from "./src/Empleados";
+import ReporteSemanal from "./src/ReporteSemanal";
 
 const MODULOS = [
   { key: "asistencia", label: "Asistencia", icono: "👷" },
   { key: "labores",    label: "Labores",    icono: "🌾" },
   { key: "empleados",  label: "Empleados",  icono: "🗂️" },
+  { key: "reporte",    label: "Reporte",    icono: "📋" },
 ];
 
 export default function App() {
@@ -46,6 +48,7 @@ export default function App() {
       {modulo === "asistencia" && <Asistencia />}
       {modulo === "labores"    && <Labores />}
       {modulo === "empleados"  && <Empleados />}
+      {modulo === "reporte" && <ReporteSemanal />}
     </div>
   );
 }
