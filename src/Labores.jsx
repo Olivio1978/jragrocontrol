@@ -1,3 +1,4 @@
+// ============ JR AGROCONTROL — Labores.jsx v0.2.4 ============
 import { useState, useMemo, useEffect, useCallback } from "react";
 
 // ============ CONFIGURACIÓN SUPABASE ============
@@ -154,11 +155,11 @@ export default function Labores({ session }) {
     try {
       // Empleados del rancho actual
       const emp = await sbFetch(
-        `empleados?rancho_id=eq.${ranchoId}&activo=eq.true&select=id,personas(nombre_completo)&order=personas(nombre_completo).asc`
+        `empleados?rancho_id=eq.${ranchoId}&activo=eq.true&select=id,personas(nombres,apellidos)&order=personas(apellidos).asc`
       );
       setEmpleados(emp.map(e => ({
         id: e.id,
-        nombre: e.personas?.nombre_completo || "Sin nombre",
+        nombre: e.personas ? `${e.personas.nombres || ''} ${e.personas.apellidos || ''}`.trim() : 'Sin nombre',
       })));
 
       // Catálogo de labores
@@ -486,7 +487,7 @@ export default function Labores({ session }) {
           </div>
           <div>
             <div style={S.headerIcon}>🌾</div>
-            <div style={S.version}>v0.2.3</div>
+            <div style={S.version}>v0.2.4</div>
           </div>
         </div>
 
