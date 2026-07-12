@@ -1,37 +1,8 @@
-// ============ JR AGROCONTROL — Labores.jsx v0.2.4 ============
+// ============ JR AGROCONTROL — Labores.jsx v0.2.5 ============
 import { useState, useMemo, useEffect, useCallback } from "react";
-
-// ============ CONFIGURACIÓN SUPABASE ============
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-async function sbFetch(path, options = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "return=representation",
-      ...options.headers,
-    },
-    ...options,
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err);
-  }
-  const text = await res.text();
-  return text ? JSON.parse(text) : [];
-}
+import { supabase } from "./lib/supabaseClient";
 
 // ============ DATOS REALES DE RANCHOS ============
-// UUIDs reales de Supabase
-const RANCHOS = [
-  { id: "45345e9f-0d4d-4a2c-b534-1eb22876906c", nombre: "Citlali", cultivo: "Zarzamora Isabella" },
-  { id: "494562ae-c957-477b-8fb0-3110b65b6a35", nombre: "Erick",   cultivo: "Frambuesa VR68" },
-  { id: "98e99401-c97f-470e-b34f-88d355a78764", nombre: "Valdo",   cultivo: "Frambuesa Malu" },
-];
-
 function generarTuneles(sectorId, numTuneles, surcosPorTunel, tunelesEspeciales = []) {
   const tuneles = [];
   for (let t = 1; t <= numTuneles; t++) {
@@ -112,6 +83,46 @@ function totalDisponible(unidadAvance, sectorId, tunelId, sectoresRancho) {
   return null;
 }
 
+// ============ PANTALLA DE LOGIN ============
+function Login() {
+  const [email, setEmail]       = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError]       = useState("");
+  const [cargando, setCargando] = useState(false);
+
+  const ingresar = async (e) => {
+    e.preventDefault();
+    setError("");
+    setCargando(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setCargando(false);
+    if (error) setError("Correo o contraseña incorrectos.");
+  };
+
+  return (
+    <div style={S.page}>
+      <div style={{ ...S.container, paddingTop: "60px" }}>
+        <div style={S.eyebrow}>JR AGROCONTROL · LABORES</div>
+        <h1 style={S.title}>Iniciar sesión</h1>
+        <form onSubmit={ingresar} style={{ marginTop: "24px" }}>
+          <div style={S.formGroup}>
+            <label style={S.label}>CORREO</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={S.select} required />
+          </div>
+          <div style={S.formGroup}>
+            <label style={S.label}>CONTRASEÑA</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={S.select} required />
+          </div>
+          {error && <p style={{ color: "#e05c5c", fontSize: "12px", marginTop: "8px" }}>{error}</p>}
+          <button type="submit" disabled={cargando} style={{ ...S.btnPrimary, marginTop: "20px" }}>
+            {cargando ? "Ingresando…" : "Ingresar"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 const VISTAS = { registro: "registro", avance: "avance", catalogo: "catalogo" };
 const FORM_ASIGNACION_INICIAL = { empleadoId: "", laborId: "", sectorId: "", tunelId: "", notasAsignacion: "" };
 const FORM_RESULTADO_INICIAL  = { cantidad: "", tareaCompleta: false, fraccionTarea: "1", notasResultado: "" };
@@ -119,26 +130,32 @@ const FORM_LABOR_INICIAL      = { nombre: "", unidadPago: "dia", icono: "🌾", 
 const FORM_TAREA_INICIAL      = { nombre: "", equivalencia: "", unidadEquivalencia: "surcos", valorTarea: "" };
 
 // ============ COMPONENTE PRINCIPAL ============
-export default function Labores({ session }) {
+export default function Labores() {
+  // ---- Sesión ----
+  const [sesion, setSesion]           = useState(undefined);
+  const [usuarioActual, setUsuarioActual] = useState(null);
+
+  // ---- Estado ----
   const [vista, setVista]       = useState(VISTAS.registro);
-  const [ranchoId, setRanchoId] = useState(RANCHOS[0].id);
+  const [ranchos, setRanchos]   = useState([]);
+  const [ranchoId, setRanchoId] = useState(null);
   const [fecha, setFecha]       = useState(todayISO());
 
   // Datos desde Supabase
-  const [empleados, setEmpleados]           = useState([]);
+  const [empleados, setEmpleados]             = useState([]);
   const [catalogoLabores, setCatalogoLabores] = useState([]);
   const [catalogoTareas, setCatalogoTareas]   = useState([]);
   const [asignaciones, setAsignaciones]       = useState([]);
   const [cargando, setCargando]               = useState(true);
   const [error, setError]                     = useState(null);
+  const [guardando, setGuardando]             = useState(false);
 
   // Modales
-  const [showAsignacion, setShowAsignacion]     = useState(false);
-  const [showResultado, setShowResultado]       = useState(false);
-  const [asignacionSelec, setAsignacionSelec]   = useState(null);
-  const [formAsignacion, setFormAsignacion]     = useState(FORM_ASIGNACION_INICIAL);
-  const [formResultado, setFormResultado]       = useState(FORM_RESULTADO_INICIAL);
-  const [guardando, setGuardando]               = useState(false);
+  const [showAsignacion, setShowAsignacion]   = useState(false);
+  const [showResultado, setShowResultado]     = useState(false);
+  const [asignacionSelec, setAsignacionSelec] = useState(null);
+  const [formAsignacion, setFormAsignacion]   = useState(FORM_ASIGNACION_INICIAL);
+  const [formResultado, setFormResultado]     = useState(FORM_RESULTADO_INICIAL);
 
   // Catálogo modales
   const [showLaborForm, setShowLaborForm]     = useState(false);
@@ -148,136 +165,174 @@ export default function Labores({ session }) {
   const [editandoTareaId, setEditandoTareaId] = useState(null);
   const [formTarea, setFormTarea]             = useState(FORM_TAREA_INICIAL);
 
-  // ============ CARGA DE DATOS ============
-  const cargarDatos = useCallback(async () => {
-    setCargando(true);
+  // ---- 1. Sesión ----
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSesion(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_e, s) => setSesion(s));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // ---- 1b. Limpiar estado al cambiar usuario ----
+  useEffect(() => {
+    setUsuarioActual(null);
+    setRanchoId(null);
+    setRanchos([]);
+    setEmpleados([]);
+    setAsignaciones([]);
     setError(null);
-    try {
-      // Empleados del rancho actual
-      const emp = await sbFetch(
-        `empleados?rancho_id=eq.${ranchoId}&activo=eq.true&select=id,personas(nombres,apellidos)&order=personas(apellidos).asc`
-      );
-      setEmpleados(emp.map(e => ({
-        id: e.id,
-        nombre: e.personas ? `${e.personas.nombres || ''} ${e.personas.apellidos || ''}`.trim() : 'Sin nombre',
-      })));
+    setFecha(todayISO());
+  }, [sesion?.user?.id]);
 
-      // Catálogo de labores
-      const labs = await sbFetch(`labores_catalogo?activo=eq.true&order=nombre.asc`);
-      setCatalogoLabores(labs.map(l => ({
-        id: l.id,
-        nombre: l.nombre,
-        descripcion: l.descripcion,
-        unidadPago: l.unidad_pago,
-        unidadAvance: l.unidad_avance,
-        rendimientoEsperado: l.rendimiento_esperado,
-        icono: l.icono,
-        color: l.color,
-      })));
+  // ---- 2. Perfil del usuario ----
+  useEffect(() => {
+    if (!sesion) return;
+    supabase
+      .from("usuarios")
+      .select("nombre_completo, rol, rancho_id")
+      .eq("id", sesion.user.id)
+      .single()
+      .then(({ data, error }) => {
+        if (error || !data) {
+          setError("Tu usuario no tiene perfil asignado.");
+          return;
+        }
+        setUsuarioActual({ nombre: data.nombre_completo, rol: data.rol, rancho_id: data.rancho_id });
+        if (data.rancho_id) setRanchoId(data.rancho_id);
+      });
+  }, [sesion]);
 
-      // Equivalencias de tareas
-      const tareas = await sbFetch(`labores_tareas?activo=eq.true&order=nombre.asc`);
-      setCatalogoTareas(tareas.map(t => ({
-        id: t.id,
-        laborId: t.labor_id,
-        nombre: t.nombre,
-        equivalencia: t.equivalencia,
-        unidadEquivalencia: t.unidad_equivalencia,
-        valorTarea: t.valor_tarea,
-      })));
+  // ---- 3. Ranchos disponibles ----
+  useEffect(() => {
+    if (!usuarioActual) return;
+    supabase
+      .from("ranchos")
+      .select("id, nombre, cultivo")
+      .eq("activo", true)
+      .then(({ data }) => {
+        setRanchos(data || []);
+        setRanchoId(prev => prev || data?.[0]?.id || null);
+      });
+  }, [usuarioActual]);
 
-      // Asignaciones del rancho y fecha actual
-      const asig = await sbFetch(
-        `labores_asignaciones?rancho_id=eq.${ranchoId}&fecha=eq.${fecha}&select=*,labores_resultados(*)&order=creado_en.desc`
-      );
-      setAsignaciones(asig.map(a => ({
-        id: a.id,
-        ranchoId: a.rancho_id,
-        empleadoId: a.empleado_id,
-        laborId: a.labor_id,
-        fecha: a.fecha,
-        sectorId: a.sector_id,
-        tunelId: a.tunel_id,
-        totalUnidades: a.total_unidades,
-        estatus: a.estatus,
-        notasAsignacion: a.notas_asignacion,
-        // Resultado relacionado
-        resultado: a.labores_resultados?.[0] || null,
-      })));
+  // ---- 4. Catálogo de labores y tareas ----
+  useEffect(() => {
+    if (!usuarioActual) return;
+    supabase
+      .from("labores_catalogo")
+      .select("*")
+      .eq("activo", true)
+      .order("nombre")
+      .then(({ data, error }) => {
+        if (error) { setError(error.message); return; }
+        setCatalogoLabores((data || []).map(l => ({
+          id: l.id, nombre: l.nombre, descripcion: l.descripcion,
+          unidadPago: l.unidad_pago, unidadAvance: l.unidad_avance,
+          rendimientoEsperado: l.rendimiento_esperado, icono: l.icono, color: l.color,
+        })));
+      });
 
-    } catch (e) {
-      setError("Error cargando datos: " + e.message);
-    } finally {
-      setCargando(false);
-    }
+    supabase
+      .from("labores_tareas")
+      .select("*")
+      .eq("activo", true)
+      .order("nombre")
+      .then(({ data }) => {
+        setCatalogoTareas((data || []).map(t => ({
+          id: t.id, laborId: t.labor_id, nombre: t.nombre,
+          equivalencia: t.equivalencia, unidadEquivalencia: t.unidad_equivalencia,
+          valorTarea: t.valor_tarea,
+        })));
+      });
+  }, [usuarioActual]);
+
+  // ---- 5. Empleados del rancho ----
+  useEffect(() => {
+    if (!ranchoId) return;
+    supabase
+      .from("empleados")
+      .select("id, personas(nombres, apellidos)")
+      .eq("rancho_id", ranchoId)
+      .eq("activo", true)
+      .then(({ data }) => {
+        setEmpleados((data || []).map(e => ({
+          id: e.id,
+          nombre: e.personas
+            ? `${e.personas.nombres || ""} ${e.personas.apellidos || ""}`.trim()
+            : "Sin nombre",
+        })));
+      });
+  }, [ranchoId]);
+
+  // ---- 6. Asignaciones del rancho y fecha ----
+  const cargarAsignaciones = useCallback(async () => {
+    if (!ranchoId || !fecha) return;
+    setCargando(true);
+    const { data, error } = await supabase
+      .from("labores_asignaciones")
+      .select("*, labores_resultados(*)")
+      .eq("rancho_id", ranchoId)
+      .eq("fecha", fecha)
+      .order("creado_en", { ascending: false });
+    if (error) { setError(error.message); }
+    else { setAsignaciones(data || []); }
+    setCargando(false);
   }, [ranchoId, fecha]);
 
-  useEffect(() => { cargarDatos(); }, [cargarDatos]);
+  useEffect(() => { cargarAsignaciones(); }, [cargarAsignaciones]);
 
-  // Enriquecer asignaciones con datos del catálogo
+  // ============ DERIVADOS ============
+  const ranchoActual    = ranchos.find(r => r.id === ranchoId);
+  const sectoresRancho  = useMemo(() => SECTORES.filter(s => s.ranchoId === ranchoId), [ranchoId]);
+  const tunelesSectorAsig = useMemo(() => TUNELES.filter(t => t.sectorId === formAsignacion.sectorId), [formAsignacion.sectorId]);
+  const laborAsignacion   = useMemo(() => catalogoLabores.find(l => l.id === formAsignacion.laborId), [formAsignacion.laborId, catalogoLabores]);
+
   const asignacionesEnriquecidas = useMemo(() => {
     return asignaciones.map(a => {
-      const labor   = catalogoLabores.find(l => l.id === a.laborId);
-      const sector  = SECTORES.find(s => s.id === a.sectorId);
-      const tunel   = TUNELES.find(t => t.id === a.tunelId);
-      const empFind = empleados.find(e => e.id === a.empleadoId);
+      const labor  = catalogoLabores.find(l => l.id === a.labor_id);
+      const sector = SECTORES.find(s => s.id === a.sector_id);
+      const tunel  = TUNELES.find(t => t.id === a.tunel_id);
+      const emp    = empleados.find(e => e.id === a.empleado_id);
       return {
         ...a,
-        laborNombre:    labor?.nombre,
-        laborColor:     labor?.color || "#7fbf5a",
-        laborIcono:     labor?.icono || "🌾",
-        laborUnidad:    labor?.unidadPago,
-        laborUnidadAvance: labor?.unidadAvance,
+        laborNombre:         labor?.nombre,
+        laborColor:          labor?.color || "#7fbf5a",
+        laborIcono:          labor?.icono || "🌾",
+        laborUnidad:         labor?.unidadPago,
+        laborUnidadAvance:   labor?.unidadAvance,
         rendimientoEsperado: labor?.rendimientoEsperado,
-        sectorNombre:   sector?.nombre,
-        tunelNumero:    tunel?.numero,
-        empleadoNombre: empFind?.nombre,
+        sectorNombre:        sector?.nombre,
+        tunelNumero:         tunel?.numero,
+        empleadoNombre:      emp?.nombre,
+        resultado:           a.labores_resultados?.[0] || null,
       };
     });
   }, [asignaciones, catalogoLabores, empleados]);
 
-  // Derivados
-  const ranchoActual      = RANCHOS.find(r => r.id === ranchoId);
-  const sectoresRancho    = useMemo(() => SECTORES.filter(s => s.ranchoId === ranchoId), [ranchoId]);
-  const tunelesSectorAsig = useMemo(() => TUNELES.filter(t => t.sectorId === formAsignacion.sectorId), [formAsignacion.sectorId]);
-  const laborAsignacion   = useMemo(() => catalogoLabores.find(l => l.id === formAsignacion.laborId), [formAsignacion.laborId, catalogoLabores]);
-
   // ============ HANDLERS ASIGNACIÓN ============
-  const abrirAsignacion = () => {
-    setFormAsignacion(FORM_ASIGNACION_INICIAL);
-    setShowAsignacion(true);
-  };
-
   const guardarAsignacion = async () => {
     if (!formAsignacion.empleadoId || !formAsignacion.laborId || !formAsignacion.sectorId) return;
     const labor = catalogoLabores.find(l => l.id === formAsignacion.laborId);
     if (labor?.unidadAvance === "surcos" && !formAsignacion.tunelId) return;
     const total = totalDisponible(labor?.unidadAvance, formAsignacion.sectorId, formAsignacion.tunelId, sectoresRancho);
-
     setGuardando(true);
-    try {
-      await sbFetch("labores_asignaciones", {
-        method: "POST",
-        body: JSON.stringify({
-          rancho_id:        ranchoId,
-          empleado_id:      formAsignacion.empleadoId,
-          labor_id:         formAsignacion.laborId,
-          fecha,
-          sector_id:        formAsignacion.sectorId,
-          tunel_id:         formAsignacion.tunelId || null,
-          total_unidades:   total,
-          estatus:          "asignado",
-          notas_asignacion: formAsignacion.notasAsignacion || null,
-        }),
-      });
+    const { error } = await supabase.from("labores_asignaciones").insert({
+      rancho_id:        ranchoId,
+      empleado_id:      formAsignacion.empleadoId,
+      labor_id:         formAsignacion.laborId,
+      fecha,
+      sector_id:        formAsignacion.sectorId,
+      tunel_id:         formAsignacion.tunelId || null,
+      total_unidades:   total,
+      estatus:          "asignado",
+      notas_asignacion: formAsignacion.notasAsignacion || null,
+    });
+    if (error) setError(error.message);
+    else {
       setShowAsignacion(false);
       setFormAsignacion(FORM_ASIGNACION_INICIAL);
-      await cargarDatos();
-    } catch (e) {
-      setError("Error guardando asignación: " + e.message);
-    } finally {
-      setGuardando(false);
+      await cargarAsignaciones();
     }
+    setGuardando(false);
   };
 
   // ============ HANDLERS RESULTADO ============
@@ -295,177 +350,149 @@ export default function Labores({ session }) {
   const guardarResultado = async () => {
     if (!asignacionSelec) return;
     setGuardando(true);
-    try {
-      if (asignacionSelec.resultado) {
-        // Actualizar resultado existente
-        await sbFetch(`labores_resultados?id=eq.${asignacionSelec.resultado.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            cantidad:        parseFloat(formResultado.cantidad) || null,
-            tarea_completa:  formResultado.tareaCompleta,
-            fraccion_tarea:  parseFloat(formResultado.fraccionTarea) || 1,
-            notas_resultado: formResultado.notasResultado || null,
-            actualizado_en:  new Date().toISOString(),
-          }),
-        });
-      } else {
-        // Crear resultado nuevo
-        await sbFetch("labores_resultados", {
-          method: "POST",
-          body: JSON.stringify({
-            asignacion_id:   asignacionSelec.id,
-            cantidad:        parseFloat(formResultado.cantidad) || null,
-            tarea_completa:  formResultado.tareaCompleta,
-            fraccion_tarea:  parseFloat(formResultado.fraccionTarea) || 1,
-            notas_resultado: formResultado.notasResultado || null,
-          }),
-        });
-      }
-      // Actualizar estatus a completado
-      await sbFetch(`labores_asignaciones?id=eq.${asignacionSelec.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ estatus: "completado", actualizado_en: new Date().toISOString() }),
-      });
-      setShowResultado(false);
-      setAsignacionSelec(null);
-      await cargarDatos();
-    } catch (e) {
-      setError("Error guardando resultado: " + e.message);
-    } finally {
-      setGuardando(false);
+    const payload = {
+      cantidad:        parseFloat(formResultado.cantidad) || null,
+      tarea_completa:  formResultado.tareaCompleta,
+      fraccion_tarea:  parseFloat(formResultado.fraccionTarea) || 1,
+      notas_resultado: formResultado.notasResultado || null,
+    };
+    if (asignacionSelec.resultado) {
+      await supabase.from("labores_resultados").update({ ...payload, actualizado_en: new Date().toISOString() })
+        .eq("id", asignacionSelec.resultado.id);
+    } else {
+      await supabase.from("labores_resultados").insert({ ...payload, asignacion_id: asignacionSelec.id });
     }
+    await supabase.from("labores_asignaciones")
+      .update({ estatus: "completado", actualizado_en: new Date().toISOString() })
+      .eq("id", asignacionSelec.id);
+    setShowResultado(false);
+    setAsignacionSelec(null);
+    await cargarAsignaciones();
+    setGuardando(false);
   };
 
   const cambiarEstatus = async (asig, nuevoEstatus) => {
-    try {
-      await sbFetch(`labores_asignaciones?id=eq.${asig.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ estatus: nuevoEstatus, actualizado_en: new Date().toISOString() }),
-      });
-      await cargarDatos();
-    } catch (e) {
-      setError("Error actualizando estatus: " + e.message);
-    }
+    await supabase.from("labores_asignaciones")
+      .update({ estatus: nuevoEstatus, actualizado_en: new Date().toISOString() })
+      .eq("id", asig.id);
+    await cargarAsignaciones();
   };
 
   const eliminarAsignacion = async (asig) => {
-    try {
-      await sbFetch(`labores_asignaciones?id=eq.${asig.id}`, { method: "DELETE" });
-      await cargarDatos();
-    } catch (e) {
-      setError("Error eliminando: " + e.message);
-    }
+    await supabase.from("labores_asignaciones").delete().eq("id", asig.id);
+    await cargarAsignaciones();
   };
 
   // ============ HANDLERS CATÁLOGO ============
   const guardarLabor = async () => {
     if (!formLabor.nombre) return;
     setGuardando(true);
-    try {
-      const payload = {
-        nombre:               formLabor.nombre,
-        descripcion:          formLabor.descripcion || null,
-        unidad_pago:          formLabor.unidadPago,
-        unidad_avance:        formLabor.unidadAvance,
-        rendimiento_esperado: parseFloat(formLabor.rendimientoEsperado) || null,
-        icono:                formLabor.icono,
-        color:                formLabor.color,
-      };
-      if (editandoLaborId) {
-        await sbFetch(`labores_catalogo?id=eq.${editandoLaborId}`, {
-          method: "PATCH", body: JSON.stringify(payload),
-        });
-      } else {
-        await sbFetch("labores_catalogo", { method: "POST", body: JSON.stringify(payload) });
-      }
-      setShowLaborForm(false);
-      setEditandoLaborId(null);
-      setFormLabor(FORM_LABOR_INICIAL);
-      await cargarDatos();
-    } catch (e) {
-      setError("Error guardando labor: " + e.message);
-    } finally {
-      setGuardando(false);
+    const payload = {
+      nombre: formLabor.nombre, descripcion: formLabor.descripcion || null,
+      unidad_pago: formLabor.unidadPago, unidad_avance: formLabor.unidadAvance,
+      rendimiento_esperado: parseFloat(formLabor.rendimientoEsperado) || null,
+      icono: formLabor.icono, color: formLabor.color,
+    };
+    if (editandoLaborId) {
+      await supabase.from("labores_catalogo").update(payload).eq("id", editandoLaborId);
+    } else {
+      await supabase.from("labores_catalogo").insert(payload);
     }
+    setShowLaborForm(false);
+    setEditandoLaborId(null);
+    setFormLabor(FORM_LABOR_INICIAL);
+    // Recargar catálogo
+    const { data } = await supabase.from("labores_catalogo").select("*").eq("activo", true).order("nombre");
+    setCatalogoLabores((data || []).map(l => ({
+      id: l.id, nombre: l.nombre, descripcion: l.descripcion,
+      unidadPago: l.unidad_pago, unidadAvance: l.unidad_avance,
+      rendimientoEsperado: l.rendimiento_esperado, icono: l.icono, color: l.color,
+    })));
+    setGuardando(false);
   };
 
   const guardarTarea = async () => {
     if (!laborSelec || !formTarea.nombre) return;
     setGuardando(true);
-    try {
-      const payload = {
-        labor_id:            laborSelec.id,
-        nombre:              formTarea.nombre,
-        equivalencia:        parseFloat(formTarea.equivalencia) || 0,
-        unidad_equivalencia: formTarea.unidadEquivalencia,
-        valor_tarea:         parseFloat(formTarea.valorTarea) || 0,
-      };
-      if (editandoTareaId) {
-        await sbFetch(`labores_tareas?id=eq.${editandoTareaId}`, {
-          method: "PATCH", body: JSON.stringify(payload),
-        });
-      } else {
-        await sbFetch("labores_tareas", { method: "POST", body: JSON.stringify(payload) });
-      }
-      setLaborSelec(null);
-      setEditandoTareaId(null);
-      setFormTarea(FORM_TAREA_INICIAL);
-      await cargarDatos();
-    } catch (e) {
-      setError("Error guardando tarea: " + e.message);
-    } finally {
-      setGuardando(false);
+    const payload = {
+      labor_id: laborSelec.id, nombre: formTarea.nombre,
+      equivalencia: parseFloat(formTarea.equivalencia) || 0,
+      unidad_equivalencia: formTarea.unidadEquivalencia,
+      valor_tarea: parseFloat(formTarea.valorTarea) || 0,
+    };
+    if (editandoTareaId) {
+      await supabase.from("labores_tareas").update(payload).eq("id", editandoTareaId);
+    } else {
+      await supabase.from("labores_tareas").insert(payload);
     }
+    setLaborSelec(null);
+    setEditandoTareaId(null);
+    setFormTarea(FORM_TAREA_INICIAL);
+    const { data } = await supabase.from("labores_tareas").select("*").eq("activo", true).order("nombre");
+    setCatalogoTareas((data || []).map(t => ({
+      id: t.id, laborId: t.labor_id, nombre: t.nombre,
+      equivalencia: t.equivalencia, unidadEquivalencia: t.unidad_equivalencia, valorTarea: t.valor_tarea,
+    })));
+    setGuardando(false);
   };
 
   // ============ AVANCE MULTI-LABOR ============
   const avancePorSector = useMemo(() => {
-    const regsCompletados = asignacionesEnriquecidas.filter(r =>
+    const completados = asignacionesEnriquecidas.filter(r =>
       r.estatus === "completado" || r.estatus === "validado"
     );
     return sectoresRancho.map(sector => {
       const tunelesSec = TUNELES.filter(t => t.sectorId === sector.id);
       const tuneles = tunelesSec.map(tunel => {
-        const laboresEnTunel = regsCompletados.filter(r =>
-          r.tunelId === tunel.id && r.laborUnidadAvance === "surcos"
-        );
+        const laboresEnTunel = completados.filter(r => r.tunel_id === tunel.id && r.laborUnidadAvance === "surcos");
         const porLabor = {};
         laboresEnTunel.forEach(r => {
-          if (!porLabor[r.laborId]) {
-            porLabor[r.laborId] = { laborNombre: r.laborNombre, laborColor: r.laborColor, laborIcono: r.laborIcono, cantidad: 0 };
+          if (!porLabor[r.labor_id]) {
+            porLabor[r.labor_id] = { laborNombre: r.laborNombre, laborColor: r.laborColor, laborIcono: r.laborIcono, cantidad: 0 };
           }
-          porLabor[r.laborId].cantidad += parseFloat(r.resultado?.cantidad) || 0;
+          porLabor[r.labor_id].cantidad += parseFloat(r.resultado?.cantidad) || 0;
         });
-        const laboresAvance = Object.values(porLabor).map(l => ({
-          ...l,
-          pct: Math.min(100, Math.round((l.cantidad / tunel.surcos.length) * 100)),
-          total: tunel.surcos.length, unidad: "surcos",
-        }));
-        return { ...tunel, laboresAvance };
+        return {
+          ...tunel,
+          laboresAvance: Object.values(porLabor).map(l => ({
+            ...l,
+            pct: Math.min(100, Math.round((l.cantidad / tunel.surcos.length) * 100)),
+            total: tunel.surcos.length,
+          })),
+        };
       });
 
-      const laboresPorTunel = regsCompletados.filter(r =>
-        r.sectorId === sector.id && r.laborUnidadAvance === "tuneles"
-      );
+      const porTunel = completados.filter(r => r.sector_id === sector.id && r.laborUnidadAvance === "tuneles");
       const porLaborTunel = {};
-      laboresPorTunel.forEach(r => {
-        if (!porLaborTunel[r.laborId]) {
-          porLaborTunel[r.laborId] = { laborNombre: r.laborNombre, laborColor: r.laborColor, laborIcono: r.laborIcono, cantidad: 0 };
+      porTunel.forEach(r => {
+        if (!porLaborTunel[r.labor_id]) {
+          porLaborTunel[r.labor_id] = { laborNombre: r.laborNombre, laborColor: r.laborColor, laborIcono: r.laborIcono, cantidad: 0 };
         }
-        porLaborTunel[r.laborId].cantidad += parseFloat(r.resultado?.cantidad) || 0;
+        porLaborTunel[r.labor_id].cantidad += parseFloat(r.resultado?.cantidad) || 0;
       });
       const laboresAvanceTunel = Object.values(porLaborTunel).map(l => ({
         ...l,
         pct: Math.min(100, Math.round((l.cantidad / sector.totalTuneles) * 100)),
-        total: sector.totalTuneles, unidad: "túneles",
+        total: sector.totalTuneles,
       }));
 
       return { ...sector, tuneles, laboresAvanceTunel };
     });
   }, [asignacionesEnriquecidas, sectoresRancho]);
 
-  // ============ RENDER ============
-  if (cargando) return (
+  // ============ GUARDS DE SESIÓN ============
+  if (sesion === undefined) return (
+    <div style={S.page}>
+      <div style={{ ...S.container, textAlign: "center", paddingTop: "80px" }}>
+        <div style={{ fontSize: "36px", marginBottom: "16px" }}>🌾</div>
+        <div style={{ color: "rgba(200,230,180,0.6)" }}>Verificando sesión...</div>
+      </div>
+    </div>
+  );
+
+  if (!sesion) return <Login />;
+
+  if (cargando && asignaciones.length === 0) return (
     <div style={S.page}>
       <div style={{ ...S.container, textAlign: "center", paddingTop: "80px" }}>
         <div style={{ fontSize: "36px", marginBottom: "16px" }}>🌾</div>
@@ -474,6 +501,7 @@ export default function Labores({ session }) {
     </div>
   );
 
+  // ============ RENDER ============
   return (
     <div style={S.page}>
       <div style={S.container}>
@@ -483,11 +511,14 @@ export default function Labores({ session }) {
           <div>
             <div style={S.eyebrow}>JR AGROCONTROL · LABORES</div>
             <h1 style={S.title}>Control de Labores</h1>
-            <div style={S.usuarioTag}>{ranchoActual?.nombre} · {ranchoActual?.cultivo}</div>
+            <div style={S.usuarioTag}>
+              {usuarioActual?.nombre} · {usuarioActual?.rol === "admin" ? "Administrador" : "Encargado"}
+            </div>
           </div>
-          <div>
+          <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>🌾</div>
-            <div style={S.version}>v0.2.4</div>
+            <div style={S.version}>v0.2.5</div>
+            <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
 
@@ -519,8 +550,8 @@ export default function Labores({ session }) {
         <div style={S.selectorsCard}>
           <div style={S.selectorGroup}>
             <label style={S.label}>RANCHO</label>
-            <select value={ranchoId} onChange={e => setRanchoId(e.target.value)} style={S.select}>
-              {RANCHOS.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+            <select value={ranchoId || ""} onChange={e => setRanchoId(e.target.value)} style={S.select}>
+              {ranchos.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
             </select>
           </div>
           <div style={S.selectorGroup}>
@@ -547,7 +578,9 @@ export default function Labores({ session }) {
               ))}
             </div>
 
-            <button onClick={abrirAsignacion} style={S.btnPrimary}>+ Asignar labor</button>
+            <button onClick={() => { setFormAsignacion(FORM_ASIGNACION_INICIAL); setShowAsignacion(true); }} style={S.btnPrimary}>
+              + Asignar labor
+            </button>
 
             {asignacionesEnriquecidas.length === 0 ? (
               <div style={S.empty}>Sin labores asignadas para esta fecha</div>
@@ -566,17 +599,14 @@ export default function Labores({ session }) {
                         </span>
                       </div>
                       <div style={S.cardBody}>
-                        <div style={S.cardRow}>
-                          <span style={S.cardLabel}>Empleado</span>
-                          <span>{reg.empleadoNombre}</span>
-                        </div>
+                        <div style={S.cardRow}><span style={S.cardLabel}>Empleado</span><span>{reg.empleadoNombre}</span></div>
                         <div style={S.cardRow}>
                           <span style={S.cardLabel}>Ubicación</span>
                           <span>{reg.sectorNombre}{reg.tunelNumero ? ` · ${reg.tunelNumero}` : ""}</span>
                         </div>
                         <div style={S.cardRow}>
                           <span style={S.cardLabel}>Modalidad</span>
-                          <span>{reg.laborUnidad === "tarea" ? "Por tarea" : reg.laborUnidad === "dia" ? "Por día" : "Por hora"} · {reg.laborUnidadAvance}</span>
+                          <span>{reg.laborUnidad === "tarea" ? "Por tarea" : "Por día"} · {reg.laborUnidadAvance}</span>
                         </div>
                         {reg.rendimientoEsperado && (
                           <div style={S.cardRow}>
@@ -584,29 +614,26 @@ export default function Labores({ session }) {
                             <span style={{ color: "#7fbf5a" }}>{reg.rendimientoEsperado} {reg.laborUnidadAvance}/día</span>
                           </div>
                         )}
-                        {reg.notasAsignacion && (
+                        {reg.notas_asignacion && (
                           <div style={S.cardRow}>
                             <span style={S.cardLabel}>Instrucciones</span>
-                            <span style={{ fontSize: "12px" }}>{reg.notasAsignacion}</span>
+                            <span style={{ fontSize: "12px" }}>{reg.notas_asignacion}</span>
                           </div>
                         )}
-                        {/* Resultado */}
                         {(reg.estatus === "completado" || reg.estatus === "validado") && reg.resultado?.cantidad && (
                           <div style={S.resultadoBox}>
                             <div style={S.resultadoTitulo}>📊 Resultado</div>
                             <div style={S.cardRow}>
                               <span style={S.cardLabel}>{labelUnidad(reg.laborUnidadAvance)}</span>
                               <span style={{ color: "#7fbf5a", fontWeight: "700" }}>
-                                {reg.resultado.cantidad}{reg.totalUnidades ? ` / ${reg.totalUnidades}` : ""}
+                                {reg.resultado.cantidad}{reg.total_unidades ? ` / ${reg.total_unidades}` : ""}
                               </span>
                             </div>
                             {reg.laborUnidad === "tarea" && (
                               <div style={S.cardRow}>
                                 <span style={S.cardLabel}>Tareas</span>
                                 <span style={{ color: reg.resultado.tarea_completa ? "#7fbf5a" : "#e8a23d" }}>
-                                  {reg.resultado.tarea_completa
-                                    ? `✅ Completa (${reg.resultado.fraccion_tarea}x)`
-                                    : `⏳ Fracción: ${reg.resultado.fraccion_tarea}x`}
+                                  {reg.resultado.tarea_completa ? `✅ Completa (${reg.resultado.fraccion_tarea}x)` : `⏳ Fracción: ${reg.resultado.fraccion_tarea}x`}
                                 </span>
                               </div>
                             )}
@@ -627,7 +654,6 @@ export default function Labores({ session }) {
                           </div>
                         )}
                       </div>
-                      {/* Acciones */}
                       <div style={{ ...S.cardAcciones, marginTop: "12px", flexWrap: "wrap" }}>
                         {reg.estatus === "asignado" && (
                           <>
@@ -677,7 +703,7 @@ export default function Labores({ session }) {
                           <span style={{ ...S.miniTag, background: l.laborColor + "22", color: l.laborColor }}>
                             {l.laborIcono} {l.laborNombre}
                           </span>
-                          <span style={S.avanceDetalle}>{l.cantidad}/{l.total} {l.unidad}</span>
+                          <span style={S.avanceDetalle}>{l.cantidad}/{l.total} túneles</span>
                         </div>
                         <div style={S.barraContainer}>
                           <div style={S.barraFondo}>
@@ -725,8 +751,10 @@ export default function Labores({ session }) {
           <>
             <div style={{ ...S.avanceHeader, marginBottom: "12px" }}>
               <div style={S.seccionTitulo}>Catálogo de labores</div>
-              <button onClick={() => { setFormLabor(FORM_LABOR_INICIAL); setEditandoLaborId(null); setShowLaborForm(true); }}
-                style={S.btnSecundario}>+ Nueva</button>
+              {usuarioActual?.rol === "admin" && (
+                <button onClick={() => { setFormLabor(FORM_LABOR_INICIAL); setEditandoLaborId(null); setShowLaborForm(true); }}
+                  style={S.btnSecundario}>+ Nueva</button>
+              )}
             </div>
             <div style={S.lista}>
               {catalogoLabores.map(labor => {
@@ -739,19 +767,15 @@ export default function Labores({ session }) {
                       </span>
                       <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                         <span style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)" }}>
-                          {labor.unidadPago === "tarea" ? "Por tarea" : labor.unidadPago === "dia" ? "Por día" : "Por hora"}
+                          {labor.unidadPago === "tarea" ? "Por tarea" : "Por día"}
                         </span>
-                        <button onClick={() => {
-                          setFormLabor({
-                            nombre: labor.nombre, unidadPago: labor.unidadPago,
-                            icono: labor.icono, color: labor.color,
-                            descripcion: labor.descripcion || "",
-                            rendimientoEsperado: labor.rendimientoEsperado || "",
-                            unidadAvance: labor.unidadAvance || "surcos",
-                          });
-                          setEditandoLaborId(labor.id);
-                          setShowLaborForm(true);
-                        }} style={S.btnIconoEdit}>✏️</button>
+                        {usuarioActual?.rol === "admin" && (
+                          <button onClick={() => {
+                            setFormLabor({ nombre: labor.nombre, unidadPago: labor.unidadPago, icono: labor.icono, color: labor.color, descripcion: labor.descripcion || "", rendimientoEsperado: labor.rendimientoEsperado || "", unidadAvance: labor.unidadAvance || "surcos" });
+                            setEditandoLaborId(labor.id);
+                            setShowLaborForm(true);
+                          }} style={S.btnIconoEdit}>✏️</button>
+                        )}
                       </div>
                     </div>
                     {labor.descripcion && (
@@ -778,16 +802,19 @@ export default function Labores({ session }) {
                             <span style={{ fontSize: "12px" }}>{t.nombre} · {t.equivalencia} {t.unidadEquivalencia}</span>
                             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                               <span style={{ fontSize: "12px", color: "#7fbf5a" }}>${t.valorTarea}</span>
-                              <button onClick={() => {
-                                setLaborSelec(labor);
-                                setEditandoTareaId(t.id);
-                                setFormTarea({ nombre: t.nombre, equivalencia: t.equivalencia, unidadEquivalencia: t.unidadEquivalencia, valorTarea: t.valorTarea });
-                              }} style={S.btnIconoEdit}>✏️</button>
+                              {usuarioActual?.rol === "admin" && (
+                                <button onClick={() => {
+                                  setLaborSelec(labor); setEditandoTareaId(t.id);
+                                  setFormTarea({ nombre: t.nombre, equivalencia: t.equivalencia, unidadEquivalencia: t.unidadEquivalencia, valorTarea: t.valorTarea });
+                                }} style={S.btnIconoEdit}>✏️</button>
+                              )}
                             </div>
                           </div>
                         ))}
-                        <button onClick={() => { setLaborSelec(labor); setEditandoTareaId(null); setFormTarea(FORM_TAREA_INICIAL); }}
-                          style={{ ...S.btnMiniLink, marginTop: "8px" }}>+ Agregar equivalencia</button>
+                        {usuarioActual?.rol === "admin" && (
+                          <button onClick={() => { setLaborSelec(labor); setEditandoTareaId(null); setFormTarea(FORM_TAREA_INICIAL); }}
+                            style={{ ...S.btnMiniLink, marginTop: "8px" }}>+ Agregar equivalencia</button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -819,13 +846,13 @@ export default function Labores({ session }) {
                 <option value="">Selecciona labor...</option>
                 {catalogoLabores.map(l => (
                   <option key={l.id} value={l.id}>
-                    {l.icono} {l.nombre} ({l.unidadPago === "tarea" ? "tarea" : l.unidadPago === "dia" ? "día" : "hora"})
+                    {l.icono} {l.nombre} ({l.unidadPago === "tarea" ? "tarea" : "día"})
                   </option>
                 ))}
               </select>
               {laborAsignacion?.rendimientoEsperado && (
                 <div style={{ fontSize: "11px", color: "#7fbf5a", marginTop: "4px" }}>
-                  ⚡ Rendimiento estándar: {laborAsignacion.rendimientoEsperado} {laborAsignacion.unidadAvance}/día
+                  ⚡ Estándar: {laborAsignacion.rendimientoEsperado} {laborAsignacion.unidadAvance}/día
                 </div>
               )}
               {laborAsignacion?.descripcion && (
@@ -885,14 +912,13 @@ export default function Labores({ session }) {
             </div>
             <div style={S.formGroup}>
               <label style={S.label}>{labelUnidad(asignacionSelec.laborUnidadAvance).toUpperCase()}</label>
-              <input type="number" min="0"
-                value={formResultado.cantidad}
+              <input type="number" min="0" value={formResultado.cantidad}
                 onChange={e => setFormResultado({ ...formResultado, cantidad: e.target.value })}
-                placeholder={asignacionSelec.totalUnidades ? `Máx. ${asignacionSelec.totalUnidades} ${asignacionSelec.laborUnidadAvance}` : "Cantidad..."}
+                placeholder={asignacionSelec.total_unidades ? `Máx. ${asignacionSelec.total_unidades} ${asignacionSelec.laborUnidadAvance}` : "Cantidad..."}
                 style={S.select} />
-              {asignacionSelec.totalUnidades && (
+              {asignacionSelec.total_unidades && (
                 <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.4)", marginTop: "4px" }}>
-                  Total disponible: {asignacionSelec.totalUnidades} {asignacionSelec.laborUnidadAvance}
+                  Total disponible: {asignacionSelec.total_unidades} {asignacionSelec.laborUnidadAvance}
                 </div>
               )}
             </div>
@@ -911,8 +937,7 @@ export default function Labores({ session }) {
                   </select>
                 </div>
                 <div style={{ ...S.formGroup, display: "flex", alignItems: "center", gap: "12px" }}>
-                  <input type="checkbox" id="tareaCompleta"
-                    checked={formResultado.tareaCompleta}
+                  <input type="checkbox" id="tareaCompleta" checked={formResultado.tareaCompleta}
                     onChange={e => setFormResultado({ ...formResultado, tareaCompleta: e.target.checked })}
                     style={{ width: "18px", height: "18px", accentColor: "#7fbf5a" }} />
                   <label htmlFor="tareaCompleta" style={{ ...S.label, marginBottom: 0 }}>TAREA COMPLETA</label>
@@ -988,9 +1013,7 @@ export default function Labores({ session }) {
         <div style={S.modalOverlay} onClick={() => { setLaborSelec(null); setEditandoTareaId(null); }}>
           <div style={S.modal} onClick={e => e.stopPropagation()}>
             <button style={S.modalClose} onClick={() => { setLaborSelec(null); setEditandoTareaId(null); }}>✕</button>
-            <h2 style={S.modalTitulo}>
-              {editandoTareaId ? "Editar equivalencia" : "Nueva equivalencia"} — {laborSelec.nombre}
-            </h2>
+            <h2 style={S.modalTitulo}>{editandoTareaId ? "Editar equivalencia" : "Nueva equivalencia"} — {laborSelec.nombre}</h2>
             <div style={S.formGroup}>
               <label style={S.label}>NOMBRE DE LA TAREA</label>
               <input value={formTarea.nombre} onChange={e => setFormTarea({ ...formTarea, nombre: e.target.value })}
@@ -1033,8 +1056,9 @@ const S = {
   eyebrow: { fontSize: "11px", letterSpacing: "0.12em", color: "#7fbf5a", marginBottom: "4px", fontWeight: "600" },
   title: { fontSize: "26px", fontWeight: "800", margin: 0, color: "#ffffff" },
   usuarioTag: { fontSize: "11px", color: "rgba(200,230,180,0.45)", marginTop: "4px" },
-  headerIcon: { fontSize: "36px", textAlign: "right" },
+  headerIcon: { fontSize: "36px" },
   version: { fontSize: "10px", color: "rgba(127,191,90,0.5)", textAlign: "right", marginTop: "2px" },
+  btnLogout: { background: "none", border: "none", color: "#e8a23d", fontSize: "11px", textDecoration: "underline", cursor: "pointer", fontFamily: "inherit", marginTop: "4px" },
   errorBanner: { background: "rgba(224,92,92,0.15)", border: "1px solid rgba(224,92,92,0.3)", borderRadius: "10px", padding: "10px 14px", marginBottom: "12px", fontSize: "12px", color: "#e05c5c", display: "flex", justifyContent: "space-between", alignItems: "center" },
   btnCerrarError: { background: "transparent", border: "none", color: "#e05c5c", cursor: "pointer", fontSize: "14px" },
   navTabs: { display: "flex", gap: "8px", marginBottom: "16px" },
