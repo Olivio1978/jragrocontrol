@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.10 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.11 ============
 // Módulo Almacén: existencias, compras/donaciones/ajustes y traspasos
 // entre bodegas con confirmación de recepción.
 // NOTA: verifica que la ruta del import de supabase coincida con la
@@ -100,6 +100,11 @@ export default function Almacen() {
     const { data: d } = await supabase.from("traspaso_detalle").select("*");
     setDetalles(d || []);
     setCargando(false);
+  }
+
+  async function cerrarSesion() {
+    await supabase.auth.signOut();
+    window.location.reload();
   }
 
   function avisar(tipo, texto) {
@@ -242,7 +247,12 @@ export default function Almacen() {
       {/* Opciones de listas desplegables legibles sobre tema oscuro */}
       <style>{`select option { background-color: #0f2818; color: #e8f5e0; }`}</style>
       <div style={{ maxWidth: "760px", margin: "0 auto", color: "#e8f5e0" }}>
-      <h2 style={{ color: C.verde, margin: "4px 0 12px" }}>📦 Almacén</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 0 12px" }}>
+        <h2 style={{ color: C.verde, margin: 0 }}>📦 Almacén</h2>
+        <button style={{ ...C.botonSec, padding: "6px 12px", fontSize: 12 }} onClick={cerrarSesion}>
+          🚪 Salir
+        </button>
+      </div>
 
       {mensaje && (
         <div style={{
