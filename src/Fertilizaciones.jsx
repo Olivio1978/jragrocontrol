@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.8 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.9 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas y mediciones de CE/pH.
 // NOTA: verifica que la ruta del import de supabase coincida con la
@@ -314,14 +314,15 @@ export default function Fertilizaciones() {
   }
 
   // ================= VISTA =================
-  if (cargando) return <div style={{ padding: 24, color: "#7fbf5a" }}>Cargando fertilizaciones…</div>;
+  if (cargando) return <div style={{ background: "#0f2818", minHeight: "100vh", padding: 24, color: "#7fbf5a" }}>Cargando fertilizaciones…</div>;
 
   const aplicacionesVisibles = aplicaciones
     .filter(f => !esEncargado || f.rancho_id === usuario.rancho_id)
     .filter(f => filtroEstado === "todas" || f.estado === filtroEstado);
 
   return (
-    <div style={{ padding: "14px", maxWidth: "760px", margin: "0 auto", color: "#e8f5e0" }}>
+    <div style={{ background: "#0f2818", minHeight: "100vh", padding: "14px" }}>
+      <div style={{ maxWidth: "760px", margin: "0 auto", color: "#e8f5e0" }}>
       <h2 style={{ color: C.verde, margin: "4px 0 12px" }}>💧 Fertilizaciones</h2>
 
       {mensaje && (
@@ -687,6 +688,7 @@ export default function Fertilizaciones() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
