@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.11 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.12 ============
 // Módulo Almacén: existencias, compras/donaciones/ajustes y traspasos
 // entre bodegas con confirmación de recepción.
 // NOTA: verifica que la ruta del import de supabase coincida con la
@@ -59,6 +59,8 @@ export default function Almacen() {
   const [pestana, setPestana] = useState("existencias");
   const [mensaje, setMensaje] = useState(null);       // {tipo:'ok'|'error', texto}
   const [cargando, setCargando] = useState(true);
+  const [sinSesion, setSinSesion] = useState(false);
+  const [credenciales, setCredenciales] = useState({ correo: "", clave: "" });
 
   // ---- Formulario de movimiento ----
   const [mov, setMov] = useState({ tipo: "entrada_compra", bodega_id: "", producto_id: "", cantidad: "", costo: "", notas: "" });
@@ -75,9 +77,15 @@ export default function Almacen() {
 
   async function cargar() {
     setCargando(true);
-    const { data: auth } = await supabase.auth.getUser();
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      setSinSesion(true);
+      setCargando(false);
+      return;
+    }
+    setSinSesion(false);
     const { data: u } = await supabase.from("usuarios")
-      .select("id, nombre_completo, rol, rancho_id").eq("id", auth.user.id).single();
+      .select("id, nombre_completo, rol, rancho_id").eq("id", session.user.id).single();
     setUsuario(u);
 
     const { data: b } = await supabase.from("bodegas")
@@ -100,6 +108,18 @@ export default function Almacen() {
     const { data: d } = await supabase.from("traspaso_detalle").select("*");
     setDetalles(d || []);
     setCargando(false);
+  }
+
+  async function iniciarSesion() {
+    if (!credenciales.correo || !credenciales.clave)
+      return avisar("error", "Escribe tu correo y contraseña.");
+    const { error } = await supabase.auth.signInWithPassword({
+      email: credenciales.correo.trim(),
+      password: credenciales.clave,
+    });
+    if (error) return avisar("error", "Correo o contraseña incorrectos.");
+    setCredenciales({ correo: "", clave: "" });
+    cargar();
   }
 
   async function cerrarSesion() {
@@ -226,6 +246,27 @@ export default function Almacen() {
   }
 
   // ================= VISTAS =================
+  if (sinSesion) return (
+    <div style={{ background: "#0f2818", minHeight: "100vh", padding: "24px 14px" }}>
+      <div style={{ ...C.tarjeta, maxWidth: 380, margin: "40px auto 0" }}>
+        <h2 style={{ color: C.verde, margin: "0 0 10px" }}>📦 Almacén</h2>
+        {mensaje && (
+          <div style={{ color: "#e07b7b", fontWeight: 700, marginBottom: 8 }}>{mensaje.texto}</div>
+        )}
+        <label style={C.etiqueta}>Correo</label>
+        <input style={C.input} type="email" value={credenciales.correo}
+          onChange={e => setCredenciales({ ...credenciales, correo: e.target.value })} />
+        <label style={C.etiqueta}>Contraseña</label>
+        <input style={C.input} type="password" value={credenciales.clave}
+          onChange={e => setCredenciales({ ...credenciales, clave: e.target.value })}
+          onKeyDown={e => e.key === "Enter" && iniciarSesion()} />
+        <button style={{ ...C.boton, marginTop: 14, width: "100%" }} onClick={iniciarSesion}>
+          Entrar
+        </button>
+      </div>
+    </div>
+  );
+
   if (cargando) return <div style={{ background: "#0f2818", minHeight: "100vh", padding: 24, color: "#7fbf5a" }}>Cargando almacén…</div>;
 
   const existenciasVisibles = esEncargado && bodegaEncargado
