@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.8 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.9 ============
 // Módulo Almacén: existencias, compras/donaciones/ajustes y traspasos
 // entre bodegas con confirmación de recepción.
 // NOTA: verifica que la ruta del import de supabase coincida con la
@@ -221,7 +221,7 @@ export default function Almacen() {
   }
 
   // ================= VISTAS =================
-  if (cargando) return <div style={{ padding: 24, color: "#7fbf5a" }}>Cargando almacén…</div>;
+  if (cargando) return <div style={{ background: "#0f2818", minHeight: "100vh", padding: 24, color: "#7fbf5a" }}>Cargando almacén…</div>;
 
   const existenciasVisibles = esEncargado && bodegaEncargado
     ? existencias.filter(e => e.bodega_id === bodegaEncargado.id)
@@ -238,7 +238,8 @@ export default function Almacen() {
   ];
 
   return (
-    <div style={{ padding: "14px", maxWidth: "760px", margin: "0 auto", color: "#e8f5e0" }}>
+    <div style={{ background: "#0f2818", minHeight: "100vh", padding: "14px" }}>
+      <div style={{ maxWidth: "760px", margin: "0 auto", color: "#e8f5e0" }}>
       <h2 style={{ color: C.verde, margin: "4px 0 12px" }}>📦 Almacén</h2>
 
       {mensaje && (
@@ -447,6 +448,7 @@ export default function Almacen() {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
