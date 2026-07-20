@@ -1,6 +1,8 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.13 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.15 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
-// campo (con motivo si se modifica), recetas y mediciones de CE/pH.
+// campo (con motivo si se modifica), recetas con dosis por hectárea y
+// programación por sector/semanas/días, sectores con semana fenológica,
+// y mediciones de CE/pH.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
@@ -32,6 +34,13 @@ const ESTADOS = {
   modificada: { label: "Modificada", color: "#5a9bd4", icono: "✏️" },
   cancelada:  { label: "Cancelada",  color: "#e05c5c", icono: "✖" },
 };
+
+const DIAS = [[1, "L"], [2, "M"], [3, "Mi"], [4, "J"], [5, "V"], [6, "S"], [7, "D"]];
+
+const EVENTOS_CICLO = [
+  ["plantacion", "Plantación"], ["poda_piso", "Poda a piso"],
+  ["poda_recuadre", "Poda recuadre"], ["pinchado", "Pinchado"], ["otro", "Otro"],
+];
 
 const ROLES_TXT = {
   admin: "Administrador", encargado: "Encargado",
@@ -135,6 +144,8 @@ export default function Fertilizaciones() {
   const [aplicaciones, setAplicaciones] = useState([]);
   const [aplicacionDet, setAplicacionDet] = useState([]);
   const [mediciones, setMediciones]     = useState([]);
+  const [estadoSectores, setEstadoSectores] = useState([]);
+  const [programaciones, setProgramaciones] = useState([]);
 
   // ---- Vistas ----
   const [pestana, setPestana]           = useState("aplicaciones");
@@ -142,7 +153,7 @@ export default function Fertilizaciones() {
 
   // ---- Nueva recomendación ----
   const [creando, setCreando] = useState(false);
-  const [nueva, setNueva] = useState({ rancho_id: "", sector: "", via: "fertirriego", receta_id: "", fecha: todayISO(), notas: "" });
+  const [nueva, setNueva] = useState({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), notas: "" });
   const [lineas, setLineas] = useState([{ producto_id: "", cantidad: "" }]);
 
   // ---- Confirmación en campo ----
@@ -153,11 +164,19 @@ export default function Fertilizaciones() {
 
   // ---- Nueva receta ----
   const [creandoReceta, setCreandoReceta] = useState(false);
-  const [nuevaReceta, setNuevaReceta] = useState({ nombre: "", cultivo: "", etapa: "", via: "fertirriego" });
+  const [nuevaReceta, setNuevaReceta] = useState({ nombre: "", cultivo: "", etapa: "", via: "fertirriego", modo: "por_ha" });
   const [lineasReceta, setLineasReceta] = useState([{ producto_id: "", cantidad: "" }]);
 
   // ---- Nueva medición ----
-  const [med, setMed] = useState({ rancho_id: "", sector: "", tipo: "suelo", ce: "", ph: "", notas: "" });
+  const [med, setMed] = useState({ sector_id: "", tipo: "suelo", ce: "", ph: "", notas: "" });
+
+  // ---- Programación de recetas ----
+  const [programando, setProgramando] = useState(null);      // receta_id abierta
+  const [progForm, setProgForm] = useState({ sector_id: "", desde: "", hasta: "", dias: [1, 3, 5] });
+
+  // ---- Nueva etapa de ciclo ----
+  const [nuevaEtapa, setNuevaEtapa] = useState(null);        // sector_id abierto
+  const [etapaForm, setEtapaForm] = useState({ etapa: "", evento: "pinchado", fecha: todayISO() });
 
   // ---- 1. Sesión ----
   useEffect(() => {
@@ -188,7 +207,7 @@ export default function Fertilizaciones() {
   // ---- 3. Datos del módulo ----
   const cargarDatos = useCallback(async () => {
     setCargando(true);
-    const [r, p, rec, rd, f, fd, m] = await Promise.all([
+    const [r, p, rec, rd, f, fd, m, es, rp] = await Promise.all([
       supabase.from("ranchos").select("id, nombre, empresa_id").order("nombre"),
       supabase.from("productos_insumos").select("id, nombre_comercial, unidad_base, costo_unitario, via_fertirriego, via_foliar, via_suelo").eq("activo", true).order("nombre_comercial"),
       supabase.from("recetas").select("*").order("nombre"),
@@ -196,6 +215,8 @@ export default function Fertilizaciones() {
       supabase.from("fertilizaciones").select("*").order("fecha_recomendada", { ascending: false }).limit(100),
       supabase.from("fertilizacion_detalle").select("*"),
       supabase.from("mediciones_campo").select("*").order("fecha", { ascending: false }).limit(30),
+      supabase.from("vw_estado_sectores").select("*"),
+      supabase.from("receta_programacion").select("*"),
     ]);
     setRanchos(r.data || []);
     if (r.data?.length) setEmpresaId(r.data[0].empresa_id);
@@ -205,6 +226,8 @@ export default function Fertilizaciones() {
     setAplicaciones(f.data || []);
     setAplicacionDet(fd.data || []);
     setMediciones(m.data || []);
+    setEstadoSectores(es.data || []);
+    setProgramaciones(rp.data || []);
     setCargando(false);
   }, []);
 
@@ -220,14 +243,37 @@ export default function Fertilizaciones() {
   const nombreRancho   = id => ranchos.find(r => r.id === id)?.nombre || "?";
   const nombreProducto = id => productos.find(p => p.id === id)?.nombre_comercial || "?";
   const unidadProducto = id => productos.find(p => p.id === id)?.unidad_base || "";
+  const sectorInfo = id => estadoSectores.find(s => s.sector_id === id);
+  // Día ISO de una fecha (1=lunes ... 7=domingo)
+  const diaISO = fecha => { const d = new Date(fecha + "T00:00:00").getDay(); return d === 0 ? 7 : d; };
 
   // ================= RECOMENDACIONES =================
   function usarReceta(recetaId) {
     if (!recetaId) { setNueva(n => ({ ...n, receta_id: "" })); return; }
     const rec = recetas.find(x => x.id === recetaId);
     const det = recetaDet.filter(d => d.receta_id === recetaId);
+    // Si la receta es por hectárea, se multiplica por la superficie del sector
+    const info = sectorInfo(nueva.sector_id);
+    const factor = rec.modo_dosis === "por_ha" && info ? Number(info.superficie_ha) : 1;
     setNueva(n => ({ ...n, receta_id: recetaId, via: rec.tipo_aplicacion }));
-    setLineas(det.map(d => ({ producto_id: d.producto_id, cantidad: String(d.cantidad_por_sector) })));
+    setLineas(det.map(d => ({
+      producto_id: d.producto_id,
+      cantidad: String(Math.round(Number(d.cantidad_por_sector) * factor * 1000) / 1000),
+    })));
+  }
+
+  // Recetas programadas para el sector, su semana fenológica y el día elegido
+  function recetasSugeridas() {
+    const info = sectorInfo(nueva.sector_id);
+    if (!info || info.semana_fenologica == null) return [];
+    const dia = diaISO(nueva.fecha);
+    return programaciones
+      .filter(pr => pr.activo && pr.sector_id === nueva.sector_id
+        && info.semana_fenologica >= pr.semana_desde
+        && info.semana_fenologica <= pr.semana_hasta
+        && (pr.dias_semana || []).includes(dia))
+      .map(pr => recetas.find(r => r.id === pr.receta_id))
+      .filter(r => r && r.activo);
   }
 
   function cambiarLinea(setter, arr, i, campo, valor) {
@@ -237,14 +283,16 @@ export default function Fertilizaciones() {
   }
 
   async function guardarRecomendacion() {
-    if (!nueva.rancho_id || !nueva.sector) return setError("Selecciona rancho y sector.");
+    const info = sectorInfo(nueva.sector_id);
+    if (!info) return setError("Selecciona el sector.");
     const validas = lineas.filter(l => l.producto_id && Number(l.cantidad) > 0);
     if (!validas.length) return setError("Agrega al menos un producto con cantidad.");
 
     const { data: cab, error: e1 } = await supabase.from("fertilizaciones").insert({
       empresa_id: empresaId,
-      rancho_id: nueva.rancho_id,
-      sector: nueva.sector,
+      rancho_id: info.rancho_id,
+      sector_id: nueva.sector_id,
+      sector: info.sector,
       tipo_aplicacion: nueva.via,
       receta_id: nueva.receta_id || null,
       fecha_recomendada: nueva.fecha,
@@ -263,7 +311,7 @@ export default function Fertilizaciones() {
     }
     avisar("Recomendación creada. El encargado la verá como pendiente.");
     setCreando(false);
-    setNueva({ rancho_id: "", sector: "", via: "fertirriego", receta_id: "", fecha: todayISO(), notas: "" });
+    setNueva({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), notas: "" });
     setLineas([{ producto_id: "", cantidad: "" }]);
     cargarDatos();
   }
@@ -333,6 +381,7 @@ export default function Fertilizaciones() {
       cultivo: nuevaReceta.cultivo.trim(),
       etapa_fenologica: nuevaReceta.etapa.trim() || null,
       tipo_aplicacion: nuevaReceta.via,
+      modo_dosis: nuevaReceta.modo,
       creado_por: usuarioActual.id,
     }).select("id").single();
     if (e1) {
@@ -350,7 +399,7 @@ export default function Fertilizaciones() {
     }
     avisar("Receta guardada.");
     setCreandoReceta(false);
-    setNuevaReceta({ nombre: "", cultivo: "", etapa: "", via: "fertirriego" });
+    setNuevaReceta({ nombre: "", cultivo: "", etapa: "", via: "fertirriego", modo: "por_ha" });
     setLineasReceta([{ producto_id: "", cantidad: "" }]);
     cargarDatos();
   }
@@ -362,15 +411,67 @@ export default function Fertilizaciones() {
     cargarDatos();
   }
 
+  // ================= PROGRAMACIÓN DE RECETAS =================
+  async function guardarProgramacion(recetaId) {
+    if (!progForm.sector_id || !progForm.desde || !progForm.hasta)
+      return setError("Completa sector y rango de semanas.");
+    if (Number(progForm.hasta) < Number(progForm.desde))
+      return setError("La semana final no puede ser menor que la inicial.");
+    if (!progForm.dias.length) return setError("Selecciona al menos un día de la semana.");
+    const { error: e } = await supabase.from("receta_programacion").insert({
+      receta_id: recetaId,
+      sector_id: progForm.sector_id,
+      semana_desde: Number(progForm.desde),
+      semana_hasta: Number(progForm.hasta),
+      dias_semana: progForm.dias,
+    });
+    if (e) return setError(e.message);
+    avisar("Programación guardada.");
+    setProgramando(null);
+    setProgForm({ sector_id: "", desde: "", hasta: "", dias: [1, 3, 5] });
+    cargarDatos();
+  }
+
+  async function borrarProgramacion(id) {
+    if (!window.confirm("¿Quitar esta programación de la receta?")) return;
+    const { error: e } = await supabase.from("receta_programacion").delete().eq("id", id);
+    if (e) return setError(e.message);
+    avisar("Programación eliminada.");
+    cargarDatos();
+  }
+
+  // ================= CICLOS: NUEVA ETAPA =================
+  async function iniciarEtapa(sectorId) {
+    if (!etapaForm.etapa.trim()) return setError("Escribe el nombre de la nueva etapa.");
+    const info = sectorInfo(sectorId);
+    if (info?.ciclo_id) {
+      const { error: e1 } = await supabase.from("ciclos_sector")
+        .update({ activo: false, cerrado_en: new Date().toISOString() })
+        .eq("id", info.ciclo_id);
+      if (e1) return setError(e1.message);
+    }
+    const { error: e2 } = await supabase.from("ciclos_sector").insert({
+      sector_id: sectorId,
+      etapa: etapaForm.etapa.trim(),
+      evento_referencia: etapaForm.evento,
+      fecha_referencia: etapaForm.fecha,
+    });
+    if (e2) return setError(e2.message);
+    avisar("Nueva etapa iniciada: el reloj de semanas fenológicas se reinició desde la fecha indicada. La etapa anterior quedó en el historial.");
+    setNuevaEtapa(null);
+    setEtapaForm({ etapa: "", evento: "pinchado", fecha: todayISO() });
+    cargarDatos();
+  }
+
   // ================= MEDICIONES =================
   async function guardarMedicion() {
-    const ranchoMed = esEncargado ? usuarioActual.rancho_id : med.rancho_id;
-    if (!ranchoMed || !med.sector) return setError("Selecciona rancho y sector.");
+    const info = sectorInfo(med.sector_id);
+    if (!info) return setError("Selecciona el sector.");
     if (!med.ce && !med.ph) return setError("Captura al menos CE o pH.");
     const { error: e } = await supabase.from("mediciones_campo").insert({
       empresa_id: empresaId,
-      rancho_id: ranchoMed,
-      sector: med.sector,
+      rancho_id: info.rancho_id,
+      sector: info.sector,
       tipo_muestra: med.tipo,
       ce: med.ce ? Number(med.ce) : null,
       ph: med.ph ? Number(med.ph) : null,
@@ -379,7 +480,7 @@ export default function Fertilizaciones() {
     });
     if (e) return setError(e.message);
     avisar("Medición registrada.");
-    setMed({ rancho_id: "", sector: "", tipo: "suelo", ce: "", ph: "", notas: "" });
+    setMed({ sector_id: "", tipo: "suelo", ce: "", ph: "", notas: "" });
     cargarDatos();
   }
 
@@ -424,7 +525,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.13</div>
+            <div style={S.version}>v0.3.15</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -448,6 +549,7 @@ export default function Fertilizaciones() {
           {[
             { key: "aplicaciones", label: "🧪 Aplicaciones" },
             { key: "recetas", label: "📖 Recetas" },
+            { key: "sectores", label: "🗺️ Sectores" },
             { key: "mediciones", label: "🌡️ CE / pH" },
           ].map(p => (
             <button key={p.key} onClick={() => setPestana(p.key)}
@@ -473,20 +575,22 @@ export default function Fertilizaciones() {
               <div style={S.card}>
                 <div style={S.seccionTitulo}>Nueva recomendación</div>
 
-                <div style={S.formRow}>
-                  <div style={{ ...S.formGroup, flex: 1 }}>
-                    <label style={S.label}>RANCHO</label>
-                    <select style={S.select} value={nueva.rancho_id}
-                      onChange={e => setNueva({ ...nueva, rancho_id: e.target.value })}>
-                      <option value="">— Selecciona —</option>
-                      {ranchos.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
-                    </select>
-                  </div>
-                  <div style={{ ...S.formGroup, flex: 1 }}>
-                    <label style={S.label}>SECTOR</label>
-                    <input style={S.select} placeholder="ej. 5" value={nueva.sector}
-                      onChange={e => setNueva({ ...nueva, sector: e.target.value })} />
-                  </div>
+                <div style={S.formGroup}>
+                  <label style={S.label}>SECTOR</label>
+                  <select style={S.select} value={nueva.sector_id}
+                    onChange={e => setNueva({ ...nueva, sector_id: e.target.value, receta_id: "" })}>
+                    <option value="">— Selecciona —</option>
+                    {estadoSectores.map(s => (
+                      <option key={s.sector_id} value={s.sector_id}>
+                        {s.rancho} · {s.sector}
+                      </option>
+                    ))}
+                  </select>
+                  {sectorInfo(nueva.sector_id) && (
+                    <div style={{ fontSize: 12, color: "#7fbf5a", marginTop: 6, fontWeight: 600 }}>
+                      {sectorInfo(nueva.sector_id).etapa} · Sem. fenológica {sectorInfo(nueva.sector_id).semana_fenologica} · Sem. calendario {sectorInfo(nueva.sector_id).semana_calendario} · {Number(sectorInfo(nueva.sector_id).superficie_ha)} ha
+                    </div>
+                  )}
                 </div>
 
                 <div style={S.formRow}>
@@ -503,6 +607,18 @@ export default function Fertilizaciones() {
                       onChange={e => setNueva({ ...nueva, fecha: e.target.value })} />
                   </div>
                 </div>
+
+                {recetasSugeridas().length > 0 && (
+                  <div style={{ ...S.formGroup, background: "rgba(127,191,90,0.08)", border: "1px solid rgba(127,191,90,0.3)", borderRadius: 10, padding: 10 }}>
+                    <label style={S.label}>📌 PROGRAMADAS PARA ESTE SECTOR, SEMANA Y DÍA</label>
+                    {recetasSugeridas().map(r => (
+                      <button key={r.id} style={{ ...S.btnSecundario, marginRight: 6, marginTop: 4 }}
+                        onClick={() => usarReceta(r.id)}>
+                        Usar: {r.nombre}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <div style={S.formGroup}>
                   <label style={S.label}>PARTIR DE UNA RECETA (OPCIONAL)</label>
@@ -685,15 +801,25 @@ export default function Fertilizaciones() {
                   </div>
                 </div>
 
-                <div style={S.formGroup}>
-                  <label style={S.label}>VÍA DE APLICACIÓN</label>
-                  <select style={S.select} value={nuevaReceta.via}
-                    onChange={e => { setNuevaReceta({ ...nuevaReceta, via: e.target.value }); setLineasReceta([{ producto_id: "", cantidad: "" }]); }}>
-                    {VIAS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
-                  </select>
+                <div style={S.formRow}>
+                  <div style={{ ...S.formGroup, flex: 1 }}>
+                    <label style={S.label}>VÍA DE APLICACIÓN</label>
+                    <select style={S.select} value={nuevaReceta.via}
+                      onChange={e => { setNuevaReceta({ ...nuevaReceta, via: e.target.value }); setLineasReceta([{ producto_id: "", cantidad: "" }]); }}>
+                      {VIAS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ ...S.formGroup, flex: 1 }}>
+                    <label style={S.label}>MODO DE DOSIS</label>
+                    <select style={S.select} value={nuevaReceta.modo}
+                      onChange={e => setNuevaReceta({ ...nuevaReceta, modo: e.target.value })}>
+                      <option value="por_ha">Por hectárea (estándar)</option>
+                      <option value="por_sector">Total por sector</option>
+                    </select>
+                  </div>
                 </div>
 
-                <label style={S.label}>PRODUCTOS Y DOSIS POR SECTOR</label>
+                <label style={S.label}>{nuevaReceta.modo === "por_ha" ? "PRODUCTOS Y DOSIS POR HECTÁREA" : "PRODUCTOS Y DOSIS POR SECTOR"}</label>
                 {lineasReceta.map((l, i) => (
                   <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                     <select style={{ ...S.select, flex: 2 }} value={l.producto_id}
@@ -739,24 +865,165 @@ export default function Fertilizaciones() {
                   {det.map(d => (
                     <div key={d.id} style={S.cardRow}>
                       <span>{nombreProducto(d.producto_id)}</span>
-                      <b style={{ color: "#e8f5e0" }}>{Number(d.cantidad_por_sector)} {unidadProducto(d.producto_id)}/sector</b>
+                      <b style={{ color: "#e8f5e0" }}>{Number(d.cantidad_por_sector)} {unidadProducto(d.producto_id)}{r.modo_dosis === "por_ha" ? "/ha" : "/sector"}</b>
                     </div>
                   ))}
+                  {/* Programación por sectores / semanas / días */}
+                  {programaciones.filter(pr => pr.receta_id === r.id).map(pr => {
+                    const inf = estadoSectores.find(s => s.sector_id === pr.sector_id);
+                    return (
+                      <div key={pr.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#7fbf5a", padding: "3px 0" }}>
+                        <span>
+                          📌 {inf ? `${inf.rancho} · ${inf.sector}` : "Sector"} · sem. {pr.semana_desde}–{pr.semana_hasta} · {DIAS.filter(([n]) => (pr.dias_semana || []).includes(n)).map(([, t]) => t).join(" ")}
+                        </span>
+                        {puedeRecomendar && (
+                          <button style={{ ...S.btnCerrarError, color: "#e05c5c" }} onClick={() => borrarProgramacion(pr.id)}>✕</button>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Formulario de programación */}
+                  {programando === r.id && (
+                    <div style={{ background: "rgba(127,191,90,0.06)", border: "1px solid rgba(127,191,90,0.2)", borderRadius: 10, padding: 10, marginTop: 8 }}>
+                      <div style={S.formGroup}>
+                        <label style={S.label}>SECTOR</label>
+                        <select style={S.select} value={progForm.sector_id}
+                          onChange={e => setProgForm({ ...progForm, sector_id: e.target.value })}>
+                          <option value="">— Selecciona —</option>
+                          {estadoSectores.map(s => (
+                            <option key={s.sector_id} value={s.sector_id}>{s.rancho} · {s.sector}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div style={S.formRow}>
+                        <div style={{ ...S.formGroup, flex: 1 }}>
+                          <label style={S.label}>SEMANA DESDE</label>
+                          <input style={S.select} type="number" min="1" value={progForm.desde}
+                            onChange={e => setProgForm({ ...progForm, desde: e.target.value })} />
+                        </div>
+                        <div style={{ ...S.formGroup, flex: 1 }}>
+                          <label style={S.label}>SEMANA HASTA</label>
+                          <input style={S.select} type="number" min="1" value={progForm.hasta}
+                            onChange={e => setProgForm({ ...progForm, hasta: e.target.value })} />
+                        </div>
+                      </div>
+                      <label style={S.label}>DÍAS DE APLICACIÓN</label>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        {DIAS.map(([n, t]) => (
+                          <button key={n}
+                            onClick={() => setProgForm(fp => ({ ...fp, dias: fp.dias.includes(n) ? fp.dias.filter(x => x !== n) : [...fp.dias, n].sort((a, b) => a - b) }))}
+                            style={{ ...S.btnSecundario, padding: "8px 0", flex: 1, fontSize: 11,
+                              background: progForm.dias.includes(n) ? "rgba(127,191,90,0.3)" : "transparent" }}>
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, padding: 10 }} onClick={() => guardarProgramacion(r.id)}>
+                          Guardar programación
+                        </button>
+                        <button style={S.btnSecundario} onClick={() => setProgramando(null)}>Cerrar</button>
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
                     <span style={{ fontSize: 12, color: "#7fbf5a", fontWeight: 700 }}>
-                      Costo estimado/sector: ${costo.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                      Costo estimado{r.modo_dosis === "por_ha" ? "/ha" : "/sector"}: ${costo.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                     </span>
                     {puedeRecomendar && (
-                      <button style={{ ...S.btnSecundario, padding: "4px 10px", fontSize: 11 }}
-                        onClick={() => alternarReceta(r)}>
-                        {r.activo ? "Desactivar" : "Reactivar"}
-                      </button>
+                      <span style={{ display: "flex", gap: 6 }}>
+                        <button style={{ ...S.btnSecundario, padding: "4px 10px", fontSize: 11 }}
+                          onClick={() => { setProgramando(programando === r.id ? null : r.id); }}>
+                          📌 Programar
+                        </button>
+                        <button style={{ ...S.btnSecundario, padding: "4px 10px", fontSize: 11 }}
+                          onClick={() => alternarReceta(r)}>
+                          {r.activo ? "Desactivar" : "Reactivar"}
+                        </button>
+                      </span>
                     )}
                   </div>
                 </div>
               );
             })}
             {recetas.length === 0 && <div style={S.empty}>Aún no hay recetas registradas.</div>}
+          </div>
+        )}
+
+        {/* ============ SECTORES Y CICLOS ============ */}
+        {pestana === "sectores" && (
+          <div>
+            {estadoSectores
+              .filter(s => !esEncargado || s.rancho_id === usuarioActual.rancho_id)
+              .map(s => (
+                <div key={s.sector_id} style={S.card}>
+                  <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                    <div style={{ fontWeight: 700, color: "#ffffff" }}>
+                      {s.rancho} · {s.sector}
+                    </div>
+                    <span style={{ ...S.miniTag, color: "#7fbf5a", background: "rgba(127,191,90,0.15)" }}>
+                      {Number(s.superficie_ha)} ha
+                    </span>
+                  </div>
+                  {s.ciclo_id ? (
+                    <>
+                      <div style={{ fontSize: 13, color: "rgba(200,230,180,0.8)", marginTop: 6 }}>
+                        {s.etapa}
+                      </div>
+                      <div style={{ fontSize: 12, color: "rgba(200,230,180,0.5)", marginTop: 2 }}>
+                        {EVENTOS_CICLO.find(([v]) => v === s.evento_referencia)?.[1]} · {s.fecha_referencia}
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#7fbf5a", marginTop: 6 }}>
+                        Semana fenológica {s.semana_fenologica} · Semana calendario {s.semana_calendario}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 13, color: "#e8a23d", marginTop: 6 }}>Sin ciclo activo.</div>
+                  )}
+
+                  {puedeRecomendar && nuevaEtapa !== s.sector_id && (
+                    <button style={{ ...S.btnSecundario, marginTop: 10, padding: "6px 12px" }}
+                      onClick={() => { setNuevaEtapa(s.sector_id); setEtapaForm({ etapa: "", evento: "pinchado", fecha: todayISO() }); }}>
+                      🔄 Iniciar nueva etapa
+                    </button>
+                  )}
+
+                  {nuevaEtapa === s.sector_id && (
+                    <div style={{ background: "rgba(127,191,90,0.06)", border: "1px solid rgba(127,191,90,0.2)", borderRadius: 10, padding: 10, marginTop: 10 }}>
+                      <div style={S.formGroup}>
+                        <label style={S.label}>NOMBRE DE LA ETAPA</label>
+                        <input style={S.select} placeholder="ej. Vegetativo post-pinchado" value={etapaForm.etapa}
+                          onChange={e => setEtapaForm({ ...etapaForm, etapa: e.target.value })} />
+                      </div>
+                      <div style={S.formRow}>
+                        <div style={{ ...S.formGroup, flex: 1 }}>
+                          <label style={S.label}>EVENTO</label>
+                          <select style={S.select} value={etapaForm.evento}
+                            onChange={e => setEtapaForm({ ...etapaForm, evento: e.target.value })}>
+                            {EVENTOS_CICLO.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                          </select>
+                        </div>
+                        <div style={{ ...S.formGroup, flex: 1 }}>
+                          <label style={S.label}>FECHA DE REFERENCIA</label>
+                          <input style={S.select} type="date" value={etapaForm.fecha}
+                            onChange={e => setEtapaForm({ ...etapaForm, fecha: e.target.value })} />
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#e8a23d", marginBottom: 10 }}>
+                        ⚠️ La etapa actual se cerrará (queda en historial) y la semana fenológica se reiniciará desde esta fecha.
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, padding: 10 }} onClick={() => iniciarEtapa(s.sector_id)}>
+                          Iniciar etapa
+                        </button>
+                        <button style={S.btnSecundario} onClick={() => setNuevaEtapa(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
           </div>
         )}
 
@@ -767,20 +1034,17 @@ export default function Fertilizaciones() {
               <div style={S.seccionTitulo}>Registrar medición</div>
 
               <div style={S.formRow}>
-                {!esEncargado && (
-                  <div style={{ ...S.formGroup, flex: 1 }}>
-                    <label style={S.label}>RANCHO</label>
-                    <select style={S.select} value={med.rancho_id}
-                      onChange={e => setMed({ ...med, rancho_id: e.target.value })}>
-                      <option value="">— Selecciona —</option>
-                      {ranchos.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
-                    </select>
-                  </div>
-                )}
                 <div style={{ ...S.formGroup, flex: 1 }}>
                   <label style={S.label}>SECTOR</label>
-                  <input style={S.select} placeholder="ej. 5" value={med.sector}
-                    onChange={e => setMed({ ...med, sector: e.target.value })} />
+                  <select style={S.select} value={med.sector_id}
+                    onChange={e => setMed({ ...med, sector_id: e.target.value })}>
+                    <option value="">— Selecciona —</option>
+                    {estadoSectores
+                      .filter(s => !esEncargado || s.rancho_id === usuarioActual.rancho_id)
+                      .map(s => (
+                        <option key={s.sector_id} value={s.sector_id}>{s.rancho} · {s.sector}</option>
+                      ))}
+                  </select>
                 </div>
                 <div style={{ ...S.formGroup, flex: 1 }}>
                   <label style={S.label}>TIPO DE MUESTRA</label>
