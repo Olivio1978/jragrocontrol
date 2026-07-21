@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.19 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.21 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -53,6 +53,13 @@ const compatible = (p, via) =>
 
 function todayISO() {
   const d = new Date();
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().split("T")[0];
+}
+
+function hace30diasFert() {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
   const offset = d.getTimezoneOffset();
   return new Date(d.getTime() - offset * 60000).toISOString().split("T")[0];
 }
@@ -177,6 +184,15 @@ export default function Fertilizaciones() {
   // ---- Nueva medición ----
   const [med, setMed] = useState({ sector_id: "", tipo: "suelo", ce: "", ph: "", humedad: "", notas: "" });
 
+  // ---- Reportes ----
+  const [repDesde, setRepDesde] = useState(hace30diasFert());
+  const [repHasta, setRepHasta] = useState(todayISO());
+  const [repRanchoId, setRepRanchoId] = useState("todos");
+  const [repFert, setRepFert] = useState([]);
+  const [repFertDet, setRepFertDet] = useState([]);
+  const [cargandoReporte, setCargandoReporte] = useState(false);
+
+
   // ---- Programación de recetas ----
   const [programando, setProgramando] = useState(null);      // receta_id abierta
   const [progForm, setProgForm] = useState({ sector_id: "", desde: "", hasta: "", dias: [1, 3, 5] });
@@ -253,6 +269,103 @@ export default function Fertilizaciones() {
   const sectorInfo = id => estadoSectores.find(s => s.sector_id === id);
   // Día ISO de una fecha (1=lunes ... 7=domingo)
   const diaISO = fecha => { const d = new Date(fecha + "T00:00:00").getDay(); return d === 0 ? 7 : d; };
+
+  // ================= REPORTES =================
+  const cargarReporte = useCallback(async () => {
+    if (!repDesde || !repHasta) return;
+    setCargandoReporte(true);
+    let qf = supabase.from("fertilizaciones").select("*")
+      .gte("fecha_recomendada", repDesde)
+      .lte("fecha_recomendada", repHasta);
+    if (esEncargado) qf = qf.eq("rancho_id", usuarioActual.rancho_id);
+    else if (repRanchoId !== "todos") qf = qf.eq("rancho_id", repRanchoId);
+
+    const { data: fData, error: e1 } = await qf;
+    if (e1) { setError(e1.message); setCargandoReporte(false); return; }
+    setRepFert(fData || []);
+
+    const ids = (fData || []).map(f => f.id);
+    if (ids.length === 0) { setRepFertDet([]); setCargandoReporte(false); return; }
+    const { data: dData, error: e2 } = await supabase.from("fertilizacion_detalle")
+      .select("*").in("fertilizacion_id", ids);
+    if (e2) { setError(e2.message); setCargandoReporte(false); return; }
+    setRepFertDet(dData || []);
+    setCargandoReporte(false);
+  }, [repDesde, repHasta, repRanchoId, esEncargado, usuarioActual]);
+
+  useEffect(() => {
+    if (pestana === "reportes" && usuarioActual) cargarReporte();
+  }, [pestana, usuarioActual, cargarReporte]);
+
+  // ---- Comparativo recomendado vs aplicado (solo eventos ya ejecutados) ----
+  const comparativoPorProducto = (() => {
+    const ejecutadas = repFert.filter(f => f.estado === "aplicada" || f.estado === "modificada");
+    const idsEjecutadas = new Set(ejecutadas.map(f => f.id));
+    const mapa = {};
+    repFertDet.filter(d => idsEjecutadas.has(d.fertilizacion_id)).forEach(d => {
+      if (!mapa[d.producto_id]) mapa[d.producto_id] = { recomendado: 0, aplicado: 0 };
+      mapa[d.producto_id].recomendado += Number(d.cantidad_recomendada);
+      mapa[d.producto_id].aplicado += Number(d.cantidad_aplicada ?? d.cantidad_recomendada);
+    });
+    return Object.entries(mapa)
+      .map(([producto_id, v]) => ({
+        producto_id, ...v,
+        nombre: nombreProducto(producto_id),
+        unidad: unidadProducto(producto_id),
+        diferencia: v.aplicado - v.recomendado,
+        pctCumplido: v.recomendado > 0 ? Math.round((v.aplicado / v.recomendado) * 100) : 0,
+      }))
+      .sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
+  })();
+
+  // ---- Historial de modificaciones con motivos ----
+  const modificacionesLista = repFert
+    .filter(f => f.estado === "modificada")
+    .sort((a, b) => new Date(b.fecha_recomendada) - new Date(a.fecha_recomendada));
+
+  const motivosResumen = (() => {
+    const mapa = {};
+    modificacionesLista.forEach(f => {
+      const m = f.motivo_modificacion || "sin_motivo";
+      mapa[m] = (mapa[m] || 0) + 1;
+    });
+    return Object.entries(mapa)
+      .map(([motivo, total]) => ({
+        motivo,
+        label: MOTIVOS.find(m => m.value === motivo)?.label || "Sin motivo registrado",
+        total,
+      }))
+      .sort((a, b) => b.total - a.total);
+  })();
+
+  function exportarComparativoCSV() {
+    const encabezado = ["Producto", "Recomendado", "Aplicado", "Diferencia", "% cumplido", "Unidad", "Del", "Al"];
+    const filas = comparativoPorProducto.map(c => [
+      c.nombre, c.recomendado.toFixed(3), c.aplicado.toFixed(3), c.diferencia.toFixed(3),
+      c.pctCumplido, c.unidad, repDesde, repHasta,
+    ]);
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `comparativo_recomendado_aplicado_${repDesde}_a_${repHasta}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarModificacionesCSV() {
+    const encabezado = ["Fecha", "Rancho", "Sector", "Motivo", "Detalle"];
+    const filas = modificacionesLista.map(f => [
+      f.fecha_recomendada, nombreRancho(f.rancho_id), f.sector,
+      MOTIVOS.find(m => m.value === f.motivo_modificacion)?.label || "Sin motivo",
+      f.motivo_otro_texto || "",
+    ]);
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `modificaciones_${repDesde}_a_${repHasta}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
 
   // ================= RECOMENDACIONES =================
   function usarReceta(recetaId) {
@@ -598,7 +711,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.19</div>
+            <div style={S.version}>v0.3.21</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -624,6 +737,7 @@ export default function Fertilizaciones() {
             { key: "recetas", label: "📖 Recetas" },
             { key: "sectores", label: "🗺️ Sectores" },
             { key: "mediciones", label: "🌡️ CE / pH" },
+            { key: "reportes", label: "📈 Reportes" },
           ].map(p => (
             <button key={p.key} onClick={() => setPestana(p.key)}
               style={{
@@ -1255,6 +1369,113 @@ export default function Fertilizaciones() {
                   </div>
                 ))}
               {mediciones.length === 0 && <div style={S.empty}>Sin mediciones registradas.</div>}
+            </div>
+          </div>
+        )}
+
+        {/* ============ REPORTES ============ */}
+        {pestana === "reportes" && (
+          <div>
+            {/* --- Filtros comunes --- */}
+            <div style={S.card}>
+              <div style={S.formRow}>
+                <div style={{ ...S.formGroup, flex: 1 }}>
+                  <label style={S.label}>DEL</label>
+                  <input style={S.select} type="date" value={repDesde} max={repHasta}
+                    onChange={e => setRepDesde(e.target.value)} />
+                </div>
+                <div style={{ ...S.formGroup, flex: 1 }}>
+                  <label style={S.label}>AL</label>
+                  <input style={S.select} type="date" value={repHasta} min={repDesde} max={todayISO()}
+                    onChange={e => setRepHasta(e.target.value)} />
+                </div>
+                {!esEncargado && (
+                  <div style={{ ...S.formGroup, flex: 1 }}>
+                    <label style={S.label}>RANCHO</label>
+                    <select style={S.select} value={repRanchoId} onChange={e => setRepRanchoId(e.target.value)}>
+                      <option value="todos">Todos los ranchos</option>
+                      {ranchos.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+              {esEncargado && (
+                <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
+                  Mostrando solo: {nombreRancho(usuarioActual.rancho_id)}
+                </div>
+              )}
+              {cargandoReporte && (
+                <div style={{ fontSize: 12, color: "rgba(200,230,180,0.5)", marginTop: 8 }}>Calculando…</div>
+              )}
+            </div>
+
+            {/* --- Comparativo recomendado vs aplicado --- */}
+            <div style={S.card}>
+              <div style={S.seccionTitulo}>Comparativo recomendado vs aplicado</div>
+              {comparativoPorProducto.length === 0 ? (
+                <div style={S.empty}>Sin aplicaciones confirmadas en este periodo.</div>
+              ) : (
+                <>
+                  {comparativoPorProducto.map(c => (
+                    <div key={c.producto_id} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                        <span style={{ color: "#e8f5e0" }}>{c.nombre}</span>
+                        <span style={{
+                          fontWeight: 800,
+                          color: c.diferencia === 0 ? "#7fbf5a" : c.diferencia > 0 ? "#5a9bd4" : "#e8a23d",
+                        }}>
+                          {c.pctCumplido}%
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
+                        Recomendado {c.recomendado.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {c.unidad}
+                        {" · "}Aplicado {c.aplicado.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {c.unidad}
+                        {c.diferencia !== 0 && (
+                          <span> · {c.diferencia > 0 ? "+" : ""}{c.diferencia.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {c.unidad}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarComparativoCSV}>
+                    ⬇️ Exportar a Excel (CSV)
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* --- Historial de modificaciones con motivos --- */}
+            <div style={S.card}>
+              <div style={S.seccionTitulo}>Historial de modificaciones con motivos</div>
+              {modificacionesLista.length === 0 ? (
+                <div style={S.empty}>Sin modificaciones registradas en este periodo.</div>
+              ) : (
+                <>
+                  {/* Resumen por motivo: detecta patrones recurrentes */}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                    {motivosResumen.map(m => (
+                      <span key={m.motivo} style={{ ...S.miniTag, color: "#5a9bd4", background: "rgba(90,155,212,0.15)" }}>
+                        {m.label}: {m.total}
+                      </span>
+                    ))}
+                  </div>
+
+                  {modificacionesLista.map(f => (
+                    <div key={f.id} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                        <span style={{ color: "#e8f5e0" }}>{nombreRancho(f.rancho_id)} · Sector {f.sector}</span>
+                        <span style={{ fontSize: 11, color: "rgba(200,230,180,0.45)" }}>{f.fecha_recomendada}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#5a9bd4" }}>
+                        {MOTIVOS.find(m => m.value === f.motivo_modificacion)?.label || "Sin motivo registrado"}
+                        {f.motivo_otro_texto ? ` — ${f.motivo_otro_texto}` : ""}
+                      </div>
+                    </div>
+                  ))}
+                  <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarModificacionesCSV}>
+                    ⬇️ Exportar a Excel (CSV)
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
