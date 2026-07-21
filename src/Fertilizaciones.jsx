@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.18 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.19 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -150,6 +150,7 @@ export default function Fertilizaciones() {
   // ---- Vistas ----
   const [pestana, setPestana]           = useState("aplicaciones");
   const [filtroEstado, setFiltroEstado] = useState("pendiente");
+  const [filtroFecha, setFiltroFecha] = useState("");
 
   // ---- Nueva recomendación ----
   const [creando, setCreando] = useState(false);
@@ -569,6 +570,7 @@ export default function Fertilizaciones() {
   const aplicacionesVisibles = aplicaciones
     .filter(f => !esEncargado || f.rancho_id === usuarioActual.rancho_id)
     .filter(f => filtroEstado === "todas" || f.estado === filtroEstado)
+    .filter(f => !filtroFecha || f.fecha_recomendada === filtroFecha)
     .slice()
     .sort((a, b) => filtroEstado === "pendiente"
       ? new Date(a.fecha_recomendada) - new Date(b.fecha_recomendada)   // más antigua (más urgente) primero
@@ -596,7 +598,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.18</div>
+            <div style={S.version}>v0.3.19</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -764,7 +766,7 @@ export default function Fertilizaciones() {
             )}
 
             {/* Filtro por estado */}
-            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
               {["pendiente", "aplicada", "modificada", "cancelada", "todas"].map(e => (
                 <button key={e} onClick={() => setFiltroEstado(e)}
                   style={{
@@ -775,6 +777,25 @@ export default function Fertilizaciones() {
                   {e === "todas" ? "Todas" : `${ESTADOS[e].icono} ${ESTADOS[e].label}`}
                 </button>
               ))}
+            </div>
+
+            {/* Filtro por fecha */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <button onClick={() => setFiltroFecha(f => f === todayISO() ? "" : todayISO())}
+                style={{
+                  ...S.btnSecundario, padding: "6px 10px", fontSize: 11,
+                  background: filtroFecha === todayISO() ? "rgba(127,191,90,0.15)" : "transparent",
+                  color: filtroFecha === todayISO() ? "#7fbf5a" : "rgba(200,230,180,0.5)",
+                }}>
+                📅 Hoy
+              </button>
+              <input type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
+                style={{ ...S.select, width: "auto", padding: "6px 10px", fontSize: 11 }} />
+              {filtroFecha && (
+                <button onClick={() => setFiltroFecha("")} style={{ ...S.btnCerrarError, fontSize: 11, color: "#e05c5c" }}>
+                  ✕ Quitar filtro de fecha
+                </button>
+              )}
             </div>
 
             {aplicacionesVisibles.map(f => {
