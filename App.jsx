@@ -1,12 +1,12 @@
-// ============ JR AGROCONTROL — App.jsx v0.3.8 ============
-// Se agregan los módulos Almacén y Fertilizaciones.
-// Cambio adicional: flexWrap en la barra para que los 7 botones
-// se acomoden en dos filas en pantallas de teléfono.
+// ============ JR AGROCONTROL — App.jsx v0.3.9 ============
+// Se retira el módulo/botón "Reporte" independiente: su contenido (Reporte
+// Semanal de nómina) se fusionó como pestaña dentro de Asistencia.jsx v1.1,
+// exclusiva para admin. El archivo src/ReporteSemanal.jsx ya no se usa
+// (puede eliminarse del proyecto o dejarse sin referenciar).
 import { useState } from "react";
 import Asistencia from "./src/Asistencia";
 import Labores from "./src/Labores";
 import Empleados from "./src/Empleados";
-import ReporteSemanal from "./src/ReporteSemanal";
 import Configuracion from "./src/Configuracion";
 import Almacen from "./src/Almacen";
 import Fertilizaciones from "./src/Fertilizaciones";
@@ -15,7 +15,6 @@ const MODULOS = [
   { key: "asistencia",      label: "Asistencia",      icono: "👷" },
   { key: "labores",         label: "Labores",         icono: "🌾" },
   { key: "empleados",       label: "Empleados",       icono: "🗂️" },
-  { key: "reporte",         label: "Reporte",         icono: "📋" },
   { key: "config",          label: "Config",          icono: "⚙️" },
   { key: "almacen",         label: "Almacén",         icono: "📦" },
   { key: "fertilizaciones", label: "Fertilización",   icono: "💧" },
@@ -58,7 +57,6 @@ export default function App() {
       {modulo === "asistencia"      && <Asistencia />}
       {modulo === "labores"         && <Labores />}
       {modulo === "empleados"       && <Empleados />}
-      {modulo === "reporte"         && <ReporteSemanal />}
       {modulo === "config"          && <Configuracion />}
       {modulo === "almacen"         && <Almacen />}
       {modulo === "fertilizaciones" && <Fertilizaciones />}
