@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.25 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.26 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -375,7 +375,7 @@ export default function Fertilizaciones() {
       .map(v => ({
         ...v,
         total: v.fertirriego + v.foliar + v.suelo,
-        nombre: `${nombreRancho(v.rancho_id)} · Sector ${v.sector}`,
+        nombre: `${nombreRancho(v.rancho_id)} · ${v.sector}`,
       }))
       .sort((a, b) => b.total - a.total);
   })();
@@ -853,7 +853,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.25</div>
+            <div style={S.version}>v0.3.26</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1064,7 +1064,7 @@ export default function Fertilizaciones() {
                 <div key={f.id} style={S.card}>
                   <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
                     <div style={{ fontWeight: 700, color: "#ffffff" }}>
-                      {nombreRancho(f.rancho_id)} · Sector {f.sector} ·{" "}
+                      {nombreRancho(f.rancho_id)} · {f.sector} ·{" "}
                       {VIAS.find(v => v.value === f.tipo_aplicacion)?.label}
                     </div>
                     <span style={{ ...S.miniTag, color: est.color, background: `${est.color}22` }}>
@@ -1604,7 +1604,7 @@ export default function Fertilizaciones() {
                   {modificacionesLista.map(f => (
                     <div key={f.id} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                        <span style={{ color: "#e8f5e0" }}>{nombreRancho(f.rancho_id)} · Sector {f.sector}</span>
+                        <span style={{ color: "#e8f5e0" }}>{nombreRancho(f.rancho_id)} · {f.sector}</span>
                         <span style={{ fontSize: 11, color: "rgba(200,230,180,0.45)" }}>{f.fecha_recomendada}</span>
                       </div>
                       <div style={{ fontSize: 12, color: "#5a9bd4" }}>
