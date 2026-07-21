@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.24 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.25 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -382,8 +382,13 @@ export default function Fertilizaciones() {
   const costoTotalGeneral = costosPorSector.reduce((s, c) => s + c.total, 0);
 
   // ---- Curva nutricional: kg de cada elemento por hectárea, por sector y semana fenológica ----
-  const curvaNutricional = (() => {
+  // ---- Curva nutricional y de suelo (kg/ha + CE/pH/humedad), unificadas
+  // por sector y semana fenológica: así se ve de un vistazo qué se aplicó
+  // y cómo respondió el suelo esa misma semana.
+  const curvaSueloNutricion = (() => {
     const mapa = {};
+
+    // Nutrientes (kg de cada elemento, congelados en cada aplicación)
     ejecutadasReporte.forEach(f => {
       if (f.semana_fenologica == null || !f.sector_id) return;
       const key = `${f.sector_id}|${f.semana_fenologica}`;
@@ -391,7 +396,7 @@ export default function Fertilizaciones() {
         mapa[key] = {
           sector_id: f.sector_id, semana: f.semana_fenologica,
           superficie: Number(f.superficie_ha) || 0,
-          n: 0, p: 0, k: 0, ca: 0, mg: 0, s: 0,
+          n: 0, p: 0, k: 0, ca: 0, mg: 0, s: 0, lecturas: [],
         };
       }
       (detPorFertReporte[f.id] || []).forEach(d => {
@@ -403,48 +408,41 @@ export default function Fertilizaciones() {
         mapa[key].s += Number(d.kg_s || 0);
       });
     });
+
+    // CE / pH / humedad: cada medición se ubica en su semana fenológica
+    // (misma lógica que usa la sugerencia automática de recetas)
+    repMediciones.forEach(m => {
+      if (!m.sector_id) return; // mediciones antiguas sin sector formal
+      const semana = semanaEnFecha(m.sector_id, String(m.fecha).slice(0, 10));
+      if (semana == null) return;
+      const key = `${m.sector_id}|${semana}`;
+      if (!mapa[key]) {
+        mapa[key] = { sector_id: m.sector_id, semana, superficie: 0, n: 0, p: 0, k: 0, ca: 0, mg: 0, s: 0, lecturas: [] };
+      }
+      mapa[key].lecturas.push(m);
+    });
+
+    const promedio = arr => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null;
+
     return Object.values(mapa)
       .map(v => {
         const ha = v.superficie > 0 ? v.superficie : 1;
         const info = sectorInfo(v.sector_id);
+        const ceVals = v.lecturas.filter(l => l.ce != null).map(l => Number(l.ce));
+        const phVals = v.lecturas.filter(l => l.ph != null).map(l => Number(l.ph));
+        const humVals = v.lecturas.filter(l => l.humedad_suelo_pct != null).map(l => Number(l.humedad_suelo_pct));
         return {
           ...v,
           nombreSector: info ? `${info.rancho} · ${info.sector}` : "Sector",
           etapa: info?.etapa || null,
           nPorHa: v.n / ha, pPorHa: v.p / ha, kPorHa: v.k / ha,
           caPorHa: v.ca / ha, mgPorHa: v.mg / ha, sPorHa: v.s / ha,
+          tieneNutrientes: (v.n + v.p + v.k + v.ca + v.mg + v.s) > 0,
+          ceProm: promedio(ceVals), phProm: promedio(phVals), humProm: promedio(humVals),
+          totalLecturas: v.lecturas.length,
         };
       })
       .sort((a, b) => a.nombreSector.localeCompare(b.nombreSector) || a.semana - b.semana);
-  })();
-
-  // ---- Curva CE / pH / humedad por sector y periodo ----
-  const curvaCEPH = (() => {
-    const mapa = {};
-    repMediciones.forEach(m => {
-      const key = m.sector_id || `rancho-${m.rancho_id}`;
-      if (!mapa[key]) mapa[key] = { sector_id: m.sector_id, rancho_id: m.rancho_id, lecturas: [] };
-      mapa[key].lecturas.push(m);
-    });
-    const promedio = arr => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null;
-    return Object.values(mapa)
-      .map(v => {
-        const info = sectorInfo(v.sector_id);
-        const lecturas = v.lecturas.slice().sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
-        const ceVals = lecturas.filter(l => l.ce != null).map(l => Number(l.ce));
-        const phVals = lecturas.filter(l => l.ph != null).map(l => Number(l.ph));
-        const humVals = lecturas.filter(l => l.humedad_suelo_pct != null).map(l => Number(l.humedad_suelo_pct));
-        return {
-          sector_id: v.sector_id,
-          nombreSector: info ? `${info.rancho} · ${info.sector}` : nombreRancho(v.rancho_id),
-          lecturas,
-          totalLecturas: lecturas.length,
-          ceProm: promedio(ceVals), ceMin: ceVals.length ? Math.min(...ceVals) : null, ceMax: ceVals.length ? Math.max(...ceVals) : null,
-          phProm: promedio(phVals), phMin: phVals.length ? Math.min(...phVals) : null, phMax: phVals.length ? Math.max(...phVals) : null,
-          humProm: promedio(humVals),
-        };
-      })
-      .sort((a, b) => a.nombreSector.localeCompare(b.nombreSector));
   })();
 
   function exportarComparativoCSV() {
@@ -490,32 +488,23 @@ export default function Fertilizaciones() {
   }
 
   function exportarCurvaCSV() {
-    const encabezado = ["Sector", "Etapa", "Sem. fenológica", "N (kg/ha)", "P (kg/ha)", "K (kg/ha)", "Ca (kg/ha)", "Mg (kg/ha)", "S (kg/ha)"];
-    const filas = curvaNutricional.map(c => [
+    const encabezado = [
+      "Sector", "Etapa", "Sem. fenológica",
+      "N (kg/ha)", "P (kg/ha)", "K (kg/ha)", "Ca (kg/ha)", "Mg (kg/ha)", "S (kg/ha)",
+      "CE prom (dS/m)", "pH prom", "Humedad prom (%)", "Lecturas",
+    ];
+    const filas = curvaSueloNutricion.map(c => [
       c.nombreSector, c.etapa || "", c.semana,
       c.nPorHa.toFixed(2), c.pPorHa.toFixed(2), c.kPorHa.toFixed(2),
       c.caPorHa.toFixed(2), c.mgPorHa.toFixed(2), c.sPorHa.toFixed(2),
+      c.ceProm != null ? c.ceProm.toFixed(2) : "", c.phProm != null ? c.phProm.toFixed(2) : "",
+      c.humProm != null ? c.humProm.toFixed(1) : "", c.totalLecturas,
     ]);
     const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `curva_nutricional_${repDesde}_a_${repHasta}.csv`; a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function exportarCEPHCSV() {
-    const encabezado = ["Sector", "Fecha", "Tipo de muestra", "CE (dS/m)", "pH", "Humedad (%)"];
-    const filas = curvaCEPH.flatMap(c => c.lecturas.map(l => [
-      c.nombreSector, new Date(l.fecha).toLocaleDateString("es-MX"),
-      MUESTRAS.find(m => m.value === l.tipo_muestra)?.label || l.tipo_muestra,
-      l.ce ?? "", l.ph ?? "", l.humedad_suelo_pct ?? "",
-    ]));
-    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `curva_ce_ph_humedad_${repDesde}_a_${repHasta}.csv`; a.click();
+    a.href = url; a.download = `curva_nutricional_suelo_${repDesde}_a_${repHasta}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -797,6 +786,7 @@ export default function Fertilizaciones() {
     const { error: e } = await supabase.from("mediciones_campo").insert({
       empresa_id: empresaId,
       rancho_id: info.rancho_id,
+      sector_id: med.sector_id,
       sector: info.sector,
       tipo_muestra: med.tipo,
       ce: med.ce ? Number(med.ce) : null,
@@ -863,7 +853,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.24</div>
+            <div style={S.version}>v0.3.25</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1666,75 +1656,47 @@ export default function Fertilizaciones() {
               )}
             </div>
 
-            {/* --- Curva nutricional por sector y semana fenológica --- */}
+            {/* --- Curva nutricional y de suelo: unificadas por sector y semana --- */}
             <div style={S.card}>
-              <div style={S.seccionTitulo}>Curva nutricional (kg/ha por semana fenológica)</div>
-              {curvaNutricional.length === 0 ? (
-                <div style={S.empty}>Sin datos suficientes (requiere aplicaciones confirmadas en sectores con ciclo activo).</div>
+              <div style={S.seccionTitulo}>Nutrición y suelo (kg/ha · CE · pH · humedad) por semana fenológica</div>
+              {curvaSueloNutricion.length === 0 ? (
+                <div style={S.empty}>Sin datos suficientes en este periodo.</div>
               ) : (
                 <>
-                  {curvaNutricional.map((c, i) => (
-                    <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                      <div style={{ fontSize: 13, color: "#e8f5e0", fontWeight: 600, marginBottom: 3 }}>
+                  {curvaSueloNutricion.map((c, i) => (
+                    <div key={i} style={{ padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ fontSize: 13, color: "#e8f5e0", fontWeight: 600, marginBottom: 4 }}>
                         {c.nombreSector} · Semana {c.semana}
                         {c.etapa && <span style={{ fontWeight: 400, color: "rgba(200,230,180,0.6)" }}> · {c.etapa}</span>}
                       </div>
-                      <div style={{ fontSize: 11, color: "rgba(200,230,180,0.6)", display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <span>N {c.nPorHa.toFixed(2)}</span>
-                        <span>P {c.pPorHa.toFixed(2)}</span>
-                        <span>K {c.kPorHa.toFixed(2)}</span>
-                        <span>Ca {c.caPorHa.toFixed(2)}</span>
-                        <span>Mg {c.mgPorHa.toFixed(2)}</span>
-                        <span>S {c.sPorHa.toFixed(2)}</span>
-                        <span style={{ color: "rgba(200,230,180,0.4)" }}>kg/ha</span>
-                      </div>
+
+                      {c.tieneNutrientes ? (
+                        <div style={{ fontSize: 11, color: "rgba(200,230,180,0.6)", display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+                          <span>N {c.nPorHa.toFixed(2)}</span>
+                          <span>P {c.pPorHa.toFixed(2)}</span>
+                          <span>K {c.kPorHa.toFixed(2)}</span>
+                          <span>Ca {c.caPorHa.toFixed(2)}</span>
+                          <span>Mg {c.mgPorHa.toFixed(2)}</span>
+                          <span>S {c.sPorHa.toFixed(2)}</span>
+                          <span style={{ color: "rgba(200,230,180,0.4)" }}>kg/ha</span>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 11, color: "rgba(200,230,180,0.35)", marginBottom: 4 }}>Sin aplicaciones esta semana</div>
+                      )}
+
+                      {c.totalLecturas > 0 ? (
+                        <div style={{ fontSize: 12, color: "rgba(200,230,180,0.8)", display: "flex", gap: 14, flexWrap: "wrap" }}>
+                          {c.ceProm != null && <span>CE <b style={{ color: "#e8f5e0" }}>{c.ceProm.toFixed(2)}</b> dS/m</span>}
+                          {c.phProm != null && <span>pH <b style={{ color: "#e8f5e0" }}>{c.phProm.toFixed(2)}</b></span>}
+                          {c.humProm != null && <span>💧 <b style={{ color: "#e8f5e0" }}>{c.humProm.toFixed(1)}%</b></span>}
+                          <span style={{ color: "rgba(200,230,180,0.4)" }}>({c.totalLecturas} lectura{c.totalLecturas !== 1 ? "s" : ""})</span>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 11, color: "rgba(200,230,180,0.35)" }}>Sin mediciones de CE/pH esta semana</div>
+                      )}
                     </div>
                   ))}
                   <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarCurvaCSV}>
-                    ⬇️ Exportar a Excel (CSV)
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* --- Curva CE / pH / humedad --- */}
-            <div style={S.card}>
-              <div style={S.seccionTitulo}>Curva CE / pH / humedad</div>
-              {curvaCEPH.length === 0 ? (
-                <div style={S.empty}>Sin mediciones registradas en este periodo.</div>
-              ) : (
-                <>
-                  {curvaCEPH.map(c => (
-                    <div key={c.sector_id || c.nombreSector} style={{ padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                      <div style={{ fontSize: 13, color: "#e8f5e0", fontWeight: 600, marginBottom: 4 }}>
-                        {c.nombreSector} <span style={{ fontWeight: 400, color: "rgba(200,230,180,0.45)" }}>· {c.totalLecturas} lectura{c.totalLecturas !== 1 ? "s" : ""}</span>
-                      </div>
-                      <div style={{ fontSize: 12, color: "rgba(200,230,180,0.75)", display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 6 }}>
-                        {c.ceProm != null && (
-                          <span>CE prom. <b style={{ color: "#e8f5e0" }}>{c.ceProm.toFixed(2)}</b> ({c.ceMin.toFixed(2)}–{c.ceMax.toFixed(2)}) dS/m</span>
-                        )}
-                        {c.phProm != null && (
-                          <span>pH prom. <b style={{ color: "#e8f5e0" }}>{c.phProm.toFixed(2)}</b> ({c.phMin.toFixed(2)}–{c.phMax.toFixed(2)})</span>
-                        )}
-                        {c.humProm != null && (
-                          <span>💧 Humedad prom. <b style={{ color: "#e8f5e0" }}>{c.humProm.toFixed(1)}%</b></span>
-                        )}
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        {c.lecturas.map(l => (
-                          <div key={l.id} style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", display: "flex", justifyContent: "space-between" }}>
-                            <span>{new Date(l.fecha).toLocaleDateString("es-MX")} · {MUESTRAS.find(m => m.value === l.tipo_muestra)?.label}</span>
-                            <span>
-                              {l.ce != null && `CE ${Number(l.ce)} `}
-                              {l.ph != null && `pH ${Number(l.ph)} `}
-                              {l.humedad_suelo_pct != null && `💧 ${Number(l.humedad_suelo_pct)}%`}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                  <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarCEPHCSV}>
                     ⬇️ Exportar a Excel (CSV)
                   </button>
                 </>
