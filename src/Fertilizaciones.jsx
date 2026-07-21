@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.15 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.16 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -525,7 +525,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.15</div>
+            <div style={S.version}>v0.3.16</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -895,15 +895,23 @@ export default function Fertilizaciones() {
                             <option key={s.sector_id} value={s.sector_id}>{s.rancho} · {s.sector}</option>
                           ))}
                         </select>
+                        {progForm.sector_id && (() => {
+                          const inf = estadoSectores.find(s => s.sector_id === progForm.sector_id);
+                          return inf ? (
+                            <div style={{ fontSize: 11, color: "#7fbf5a", marginTop: 4 }}>
+                              Este sector va hoy en la semana fenológica {inf.semana_fenologica} ({inf.etapa})
+                            </div>
+                          ) : null;
+                        })()}
                       </div>
                       <div style={S.formRow}>
                         <div style={{ ...S.formGroup, flex: 1 }}>
-                          <label style={S.label}>SEMANA DESDE</label>
+                          <label style={S.label}>SEM. FENOLÓGICA DESDE</label>
                           <input style={S.select} type="number" min="1" value={progForm.desde}
                             onChange={e => setProgForm({ ...progForm, desde: e.target.value })} />
                         </div>
                         <div style={{ ...S.formGroup, flex: 1 }}>
-                          <label style={S.label}>SEMANA HASTA</label>
+                          <label style={S.label}>SEM. FENOLÓGICA HASTA</label>
                           <input style={S.select} type="number" min="1" value={progForm.hasta}
                             onChange={e => setProgForm({ ...progForm, hasta: e.target.value })} />
                         </div>
