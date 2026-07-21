@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.17 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.18 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -155,6 +155,8 @@ export default function Fertilizaciones() {
   const [creando, setCreando] = useState(false);
   const [nueva, setNueva] = useState({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), minutos_riego: "", notas: "" });
   const [lineas, setLineas] = useState([{ producto_id: "", cantidad: "" }]);
+  const [generarRango, setGenerarRango] = useState(false);
+  const [rangoHasta, setRangoHasta] = useState("");
 
   // ---- Confirmación en campo ----
   const [confirmando, setConfirmando] = useState(null);
@@ -166,6 +168,10 @@ export default function Fertilizaciones() {
   const [creandoReceta, setCreandoReceta] = useState(false);
   const [nuevaReceta, setNuevaReceta] = useState({ nombre: "", cultivo: "", etapa: "", via: "fertirriego", modo: "por_ha" });
   const [lineasReceta, setLineasReceta] = useState([{ producto_id: "", cantidad: "" }]);
+  const [recBuscar, setRecBuscar] = useState("");
+  const [recFiltroVia, setRecFiltroVia] = useState("todas");
+  const [recFiltroCultivo, setRecFiltroCultivo] = useState("todos");
+  const [recVerInactivas, setRecVerInactivas] = useState(false);
 
   // ---- Nueva medición ----
   const [med, setMed] = useState({ sector_id: "", tipo: "suelo", ce: "", ph: "", humedad: "", notas: "" });
@@ -262,6 +268,36 @@ export default function Fertilizaciones() {
     })));
   }
 
+  // Semana fenológica de un sector en una fecha cualquiera (no solo "hoy")
+  function semanaEnFecha(sectorId, fechaStr) {
+    const info = sectorInfo(sectorId);
+    if (!info || !info.fecha_referencia) return null;
+    const fecha = new Date(fechaStr + "T00:00:00");
+    const ref = new Date(info.fecha_referencia + "T00:00:00");
+    const diffDias = Math.floor((fecha - ref) / 86400000);
+    return Math.floor(diffDias / 7) + 1;
+  }
+
+  // Dentro de un rango [desde, hasta], las fechas que caen en algún día y
+  // semana fenológica programados para esta receta en este sector
+  function fechasProgramadasEnRango(recetaId, sectorId, desde, hasta) {
+    const progs = programaciones.filter(pr => pr.activo && pr.receta_id === recetaId && pr.sector_id === sectorId);
+    if (!progs.length) return [];
+    const resultado = [];
+    let d = new Date(desde + "T00:00:00");
+    const fin = new Date(hasta + "T00:00:00");
+    while (d <= fin) {
+      const iso = d.toISOString().split("T")[0];
+      const dia = diaISO(iso);
+      const semana = semanaEnFecha(sectorId, iso);
+      if (semana != null && progs.some(pr => semana >= pr.semana_desde && semana <= pr.semana_hasta && (pr.dias_semana || []).includes(dia))) {
+        resultado.push(iso);
+      }
+      d.setDate(d.getDate() + 1);
+    }
+    return resultado;
+  }
+
   // Recetas programadas para el sector, su semana fenológica y el día elegido
   function recetasSugeridas() {
     const info = sectorInfo(nueva.sector_id);
@@ -282,12 +318,8 @@ export default function Fertilizaciones() {
     setter(nuevas);
   }
 
-  async function guardarRecomendacion() {
-    const info = sectorInfo(nueva.sector_id);
-    if (!info) return setError("Selecciona el sector.");
-    const validas = lineas.filter(l => l.producto_id && Number(l.cantidad) > 0);
-    if (!validas.length) return setError("Agrega al menos un producto con cantidad.");
-
+  // Crea un único evento de recomendación en la fecha indicada
+  async function crearEventoRecomendacion(info, fecha, validas) {
     const { data: cab, error: e1 } = await supabase.from("fertilizaciones").insert({
       empresa_id: empresaId,
       rancho_id: info.rancho_id,
@@ -295,12 +327,12 @@ export default function Fertilizaciones() {
       sector: info.sector,
       tipo_aplicacion: nueva.via,
       receta_id: nueva.receta_id || null,
-      fecha_recomendada: nueva.fecha,
+      fecha_recomendada: fecha,
       minutos_riego: nueva.via === "fertirriego" && nueva.minutos_riego ? Number(nueva.minutos_riego) : null,
       recomendada_por: usuarioActual.id,
       notas: nueva.notas || null,
     }).select("id").single();
-    if (e1) return setError(e1.message);
+    if (e1) return e1.message;
 
     for (const l of validas) {
       const { error: e2 } = await supabase.from("fertilizacion_detalle").insert({
@@ -308,12 +340,39 @@ export default function Fertilizaciones() {
         producto_id: l.producto_id,
         cantidad_recomendada: Number(l.cantidad),
       });
-      if (e2) return setError(`${nombreProducto(l.producto_id)}: ${e2.message}`);
+      if (e2) return `${nombreProducto(l.producto_id)}: ${e2.message}`;
     }
-    avisar("Recomendación creada. El encargado la verá como pendiente.");
+    return null;
+  }
+
+  async function guardarRecomendacion() {
+    const info = sectorInfo(nueva.sector_id);
+    if (!info) return setError("Selecciona el sector.");
+    const validas = lineas.filter(l => l.producto_id && Number(l.cantidad) > 0);
+    if (!validas.length) return setError("Agrega al menos un producto con cantidad.");
+
+    // Modo lote: generar una recomendación por cada día programado en el rango
+    if (generarRango && nueva.receta_id) {
+      if (!rangoHasta) return setError("Indica hasta qué fecha generar.");
+      const fechas = fechasProgramadasEnRango(nueva.receta_id, nueva.sector_id, nueva.fecha, rangoHasta);
+      if (!fechas.length) return setError("No hay días programados de esta receta para este sector en ese rango de fechas.");
+
+      for (const fch of fechas) {
+        const err = await crearEventoRecomendacion(info, fch, validas);
+        if (err) return setError(err);
+      }
+      avisar(`${fechas.length} recomendaciones generadas (una por cada día programado). El encargado las verá como pendientes.`);
+    } else {
+      const err = await crearEventoRecomendacion(info, nueva.fecha, validas);
+      if (err) return setError(err);
+      avisar("Recomendación creada. El encargado la verá como pendiente.");
+    }
+
     setCreando(false);
     setNueva({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), minutos_riego: "", notas: "" });
     setLineas([{ producto_id: "", cantidad: "" }]);
+    setGenerarRango(false);
+    setRangoHasta("");
     cargarDatos();
   }
 
@@ -509,7 +568,17 @@ export default function Fertilizaciones() {
 
   const aplicacionesVisibles = aplicaciones
     .filter(f => !esEncargado || f.rancho_id === usuarioActual.rancho_id)
-    .filter(f => filtroEstado === "todas" || f.estado === filtroEstado);
+    .filter(f => filtroEstado === "todas" || f.estado === filtroEstado)
+    .slice()
+    .sort((a, b) => filtroEstado === "pendiente"
+      ? new Date(a.fecha_recomendada) - new Date(b.fecha_recomendada)   // más antigua (más urgente) primero
+      : new Date(b.fecha_recomendada) - new Date(a.fecha_recomendada)); // más reciente primero
+
+  const recetasFiltradas = recetas
+    .filter(r => recVerInactivas || r.activo)
+    .filter(r => recFiltroVia === "todas" || r.tipo_aplicacion === recFiltroVia)
+    .filter(r => recFiltroCultivo === "todos" || r.cultivo === recFiltroCultivo)
+    .filter(r => !recBuscar.trim() || r.nombre.toLowerCase().includes(recBuscar.trim().toLowerCase()));
 
   return (
     <div style={S.page}>
@@ -527,7 +596,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.17</div>
+            <div style={S.version}>v0.3.18</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -631,6 +700,25 @@ export default function Fertilizaciones() {
                   </select>
                 </div>
 
+                {nueva.receta_id && programaciones.some(pr => pr.activo && pr.receta_id === nueva.receta_id && pr.sector_id === nueva.sector_id) && (
+                  <div style={{ ...S.formGroup, background: "rgba(90,155,212,0.08)", border: "1px solid rgba(90,155,212,0.3)", borderRadius: 10, padding: 10 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#e8f5e0", cursor: "pointer" }}>
+                      <input type="checkbox" checked={generarRango} onChange={e => setGenerarRango(e.target.checked)} />
+                      📅 Generar automáticamente para todos los días programados
+                    </label>
+                    {generarRango && (
+                      <div style={{ marginTop: 10 }}>
+                        <label style={S.label}>GENERAR DESDE {nueva.fecha} HASTA</label>
+                        <input style={S.select} type="date" min={nueva.fecha} value={rangoHasta}
+                          onChange={e => setRangoHasta(e.target.value)} />
+                        <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginTop: 4 }}>
+                          Se creará una recomendación pendiente por cada día, dentro de este rango, que coincida con los días y semanas programados de esta receta para este sector.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <label style={S.label}>PRODUCTOS Y CANTIDADES POR SECTOR</label>
                 {lineas.map((l, i) => (
                   <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -668,9 +756,9 @@ export default function Fertilizaciones() {
 
                 <div style={{ display: "flex", gap: 8 }}>
                   <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={guardarRecomendacion}>
-                    Guardar recomendación
+                    {generarRango ? "Generar recomendaciones" : "Guardar recomendación"}
                   </button>
-                  <button style={S.btnSecundario} onClick={() => setCreando(false)}>Cancelar</button>
+                  <button style={S.btnSecundario} onClick={() => { setCreando(false); setGenerarRango(false); setRangoHasta(""); }}>Cancelar</button>
                 </div>
               </div>
             )}
@@ -858,7 +946,29 @@ export default function Fertilizaciones() {
               </div>
             )}
 
-            {recetas.map(r => {
+            {/* Buscador y filtros */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <input style={{ ...S.select, flex: 2, minWidth: 140 }} placeholder="🔍 Buscar por nombre…"
+                value={recBuscar} onChange={e => setRecBuscar(e.target.value)} />
+              <select style={{ ...S.select, flex: 1, minWidth: 120 }} value={recFiltroVia}
+                onChange={e => setRecFiltroVia(e.target.value)}>
+                <option value="todas">Todas las vías</option>
+                {VIAS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+              </select>
+              <select style={{ ...S.select, flex: 1, minWidth: 120 }} value={recFiltroCultivo}
+                onChange={e => setRecFiltroCultivo(e.target.value)}>
+                <option value="todos">Todos los cultivos</option>
+                {[...new Set(recetas.map(r => r.cultivo))].sort().map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "rgba(200,230,180,0.6)", marginBottom: 12, cursor: "pointer" }}>
+              <input type="checkbox" checked={recVerInactivas} onChange={e => setRecVerInactivas(e.target.checked)} />
+              Mostrar recetas inactivas
+            </label>
+
+            {recetasFiltradas.map(r => {
               const det = recetaDet.filter(d => d.receta_id === r.id);
               const costo = det.reduce((s, d) => {
                 const p = productos.find(x => x.id === d.producto_id);
@@ -970,7 +1080,7 @@ export default function Fertilizaciones() {
                 </div>
               );
             })}
-            {recetas.length === 0 && <div style={S.empty}>Aún no hay recetas registradas.</div>}
+            {recetasFiltradas.length === 0 && <div style={S.empty}>Ninguna receta coincide con el filtro.</div>}
           </div>
         )}
 
