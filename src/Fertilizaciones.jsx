@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.16 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.17 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -153,7 +153,7 @@ export default function Fertilizaciones() {
 
   // ---- Nueva recomendación ----
   const [creando, setCreando] = useState(false);
-  const [nueva, setNueva] = useState({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), notas: "" });
+  const [nueva, setNueva] = useState({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), minutos_riego: "", notas: "" });
   const [lineas, setLineas] = useState([{ producto_id: "", cantidad: "" }]);
 
   // ---- Confirmación en campo ----
@@ -168,7 +168,7 @@ export default function Fertilizaciones() {
   const [lineasReceta, setLineasReceta] = useState([{ producto_id: "", cantidad: "" }]);
 
   // ---- Nueva medición ----
-  const [med, setMed] = useState({ sector_id: "", tipo: "suelo", ce: "", ph: "", notas: "" });
+  const [med, setMed] = useState({ sector_id: "", tipo: "suelo", ce: "", ph: "", humedad: "", notas: "" });
 
   // ---- Programación de recetas ----
   const [programando, setProgramando] = useState(null);      // receta_id abierta
@@ -296,6 +296,7 @@ export default function Fertilizaciones() {
       tipo_aplicacion: nueva.via,
       receta_id: nueva.receta_id || null,
       fecha_recomendada: nueva.fecha,
+      minutos_riego: nueva.via === "fertirriego" && nueva.minutos_riego ? Number(nueva.minutos_riego) : null,
       recomendada_por: usuarioActual.id,
       notas: nueva.notas || null,
     }).select("id").single();
@@ -311,7 +312,7 @@ export default function Fertilizaciones() {
     }
     avisar("Recomendación creada. El encargado la verá como pendiente.");
     setCreando(false);
-    setNueva({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), notas: "" });
+    setNueva({ sector_id: "", via: "fertirriego", receta_id: "", fecha: todayISO(), minutos_riego: "", notas: "" });
     setLineas([{ producto_id: "", cantidad: "" }]);
     cargarDatos();
   }
@@ -467,7 +468,7 @@ export default function Fertilizaciones() {
   async function guardarMedicion() {
     const info = sectorInfo(med.sector_id);
     if (!info) return setError("Selecciona el sector.");
-    if (!med.ce && !med.ph) return setError("Captura al menos CE o pH.");
+    if (!med.ce && !med.ph && !med.humedad) return setError("Captura al menos CE, pH o humedad.");
     const { error: e } = await supabase.from("mediciones_campo").insert({
       empresa_id: empresaId,
       rancho_id: info.rancho_id,
@@ -475,12 +476,13 @@ export default function Fertilizaciones() {
       tipo_muestra: med.tipo,
       ce: med.ce ? Number(med.ce) : null,
       ph: med.ph ? Number(med.ph) : null,
+      humedad_suelo_pct: med.humedad ? Number(med.humedad) : null,
       registrado_por: usuarioActual.id,
       notas: med.notas || null,
     });
     if (e) return setError(e.message);
     avisar("Medición registrada.");
-    setMed({ sector_id: "", tipo: "suelo", ce: "", ph: "", notas: "" });
+    setMed({ sector_id: "", tipo: "suelo", ce: "", ph: "", humedad: "", notas: "" });
     cargarDatos();
   }
 
@@ -525,7 +527,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.16</div>
+            <div style={S.version}>v0.3.17</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -647,6 +649,17 @@ export default function Fertilizaciones() {
                   + Agregar producto
                 </button>
 
+                {nueva.via === "fertirriego" && (
+                  <div style={{ ...S.formGroup, marginTop: 16 }}>
+                    <label style={S.label}>MINUTOS DE RIEGO (OPCIONAL)</label>
+                    <input style={S.select} type="number" min="1" placeholder="ej. 30" value={nueva.minutos_riego}
+                      onChange={e => setNueva({ ...nueva, minutos_riego: e.target.value })} />
+                    <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginTop: 4 }}>
+                      Tiempo de riego en que se aplica la solución (dato de control agronómico).
+                    </div>
+                  </div>
+                )}
+
                 <div style={{ ...S.formGroup, marginTop: 16 }}>
                   <label style={S.label}>NOTAS</label>
                   <input style={S.select} value={nueva.notas}
@@ -696,6 +709,7 @@ export default function Fertilizaciones() {
                   <div style={{ fontSize: 11, color: "rgba(200,230,180,0.45)", margin: "4px 0 8px" }}>
                     Recomendada: {f.fecha_recomendada}
                     {f.fecha_aplicada && ` · Aplicada: ${new Date(f.fecha_aplicada).toLocaleDateString("es-MX")}`}
+                    {f.minutos_riego && ` · 💧 ${f.minutos_riego} min de riego`}
                   </div>
                   {f.motivo_modificacion && (
                     <div style={{ fontSize: 12, color: "#5a9bd4", marginBottom: 6 }}>
@@ -1073,6 +1087,11 @@ export default function Fertilizaciones() {
                   <input style={S.select} type="number" min="0" max="14" step="0.01" value={med.ph}
                     onChange={e => setMed({ ...med, ph: e.target.value })} />
                 </div>
+                <div style={{ ...S.formGroup, flex: 1 }}>
+                  <label style={S.label}>HUMEDAD (%)</label>
+                  <input style={S.select} type="number" min="0" max="100" step="0.1" value={med.humedad}
+                    onChange={e => setMed({ ...med, humedad: e.target.value })} />
+                </div>
               </div>
 
               <div style={S.formGroup}>
@@ -1099,6 +1118,7 @@ export default function Fertilizaciones() {
                     </div>
                     <div style={{ fontWeight: 800, fontSize: 14, color: "#e8f5e0" }}>
                       {m.ce != null && <span style={{ marginRight: 16 }}>CE: {Number(m.ce)} dS/m</span>}
+                      {m.humedad_suelo_pct != null && <span style={{ marginRight: 16 }}>💧 Humedad: {Number(m.humedad_suelo_pct)}%</span>}
                       {m.ph != null && <span>pH: {Number(m.ph)}</span>}
                     </div>
                   </div>
