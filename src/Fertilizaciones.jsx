@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.21 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.22 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -297,6 +297,14 @@ export default function Fertilizaciones() {
     if (pestana === "reportes" && usuarioActual) cargarReporte();
   }, [pestana, usuarioActual, cargarReporte]);
 
+  // ---- Diccionario fertilizacion_id -> sus líneas de detalle (reutilizado abajo) ----
+  const detPorFertReporte = (() => {
+    const m = {};
+    repFertDet.forEach(d => { (m[d.fertilizacion_id] ||= []).push(d); });
+    return m;
+  })();
+  const ejecutadasReporte = repFert.filter(f => f.estado === "aplicada" || f.estado === "modificada");
+
   // ---- Comparativo recomendado vs aplicado (solo eventos ya ejecutados) ----
   const comparativoPorProducto = (() => {
     const ejecutadas = repFert.filter(f => f.estado === "aplicada" || f.estado === "modificada");
@@ -338,6 +346,65 @@ export default function Fertilizaciones() {
       .sort((a, b) => b.total - a.total);
   })();
 
+  // ---- Costos de fertilización y foliares por sector/rancho ----
+  const costosPorSector = (() => {
+    const mapa = {};
+    ejecutadasReporte.forEach(f => {
+      const detalles = detPorFertReporte[f.id] || [];
+      const costoEvento = detalles.reduce((s, d) =>
+        s + Number(d.cantidad_aplicada ?? 0) * Number(d.costo_unitario ?? 0), 0);
+      const key = `${f.rancho_id}|${f.sector}`;
+      if (!mapa[key]) mapa[key] = { rancho_id: f.rancho_id, sector: f.sector, fertirriego: 0, foliar: 0, suelo: 0 };
+      if (f.tipo_aplicacion === "foliar") mapa[key].foliar += costoEvento;
+      else if (f.tipo_aplicacion === "suelo") mapa[key].suelo += costoEvento;
+      else mapa[key].fertirriego += costoEvento;
+    });
+    return Object.values(mapa)
+      .map(v => ({
+        ...v,
+        total: v.fertirriego + v.foliar + v.suelo,
+        nombre: `${nombreRancho(v.rancho_id)} · Sector ${v.sector}`,
+      }))
+      .sort((a, b) => b.total - a.total);
+  })();
+  const costoTotalGeneral = costosPorSector.reduce((s, c) => s + c.total, 0);
+
+  // ---- Curva nutricional: kg de cada elemento por hectárea, por sector y semana fenológica ----
+  const curvaNutricional = (() => {
+    const mapa = {};
+    ejecutadasReporte.forEach(f => {
+      if (f.semana_fenologica == null || !f.sector_id) return;
+      const key = `${f.sector_id}|${f.semana_fenologica}`;
+      if (!mapa[key]) {
+        mapa[key] = {
+          sector_id: f.sector_id, semana: f.semana_fenologica,
+          superficie: Number(f.superficie_ha) || 0,
+          n: 0, p: 0, k: 0, ca: 0, mg: 0, s: 0,
+        };
+      }
+      (detPorFertReporte[f.id] || []).forEach(d => {
+        mapa[key].n += Number(d.kg_n || 0);
+        mapa[key].p += Number(d.kg_p || 0);
+        mapa[key].k += Number(d.kg_k || 0);
+        mapa[key].ca += Number(d.kg_ca || 0);
+        mapa[key].mg += Number(d.kg_mg || 0);
+        mapa[key].s += Number(d.kg_s || 0);
+      });
+    });
+    return Object.values(mapa)
+      .map(v => {
+        const ha = v.superficie > 0 ? v.superficie : 1;
+        const info = sectorInfo(v.sector_id);
+        return {
+          ...v,
+          nombreSector: info ? `${info.rancho} · ${info.sector}` : "Sector",
+          nPorHa: v.n / ha, pPorHa: v.p / ha, kPorHa: v.k / ha,
+          caPorHa: v.ca / ha, mgPorHa: v.mg / ha, sPorHa: v.s / ha,
+        };
+      })
+      .sort((a, b) => a.nombreSector.localeCompare(b.nombreSector) || a.semana - b.semana);
+  })();
+
   function exportarComparativoCSV() {
     const encabezado = ["Producto", "Recomendado", "Aplicado", "Diferencia", "% cumplido", "Unidad", "Del", "Al"];
     const filas = comparativoPorProducto.map(c => [
@@ -364,6 +431,34 @@ export default function Fertilizaciones() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = `modificaciones_${repDesde}_a_${repHasta}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarCostosCSV() {
+    const encabezado = ["Rancho · Sector", "Fertirriego", "Foliar", "Suelo", "Total", "Del", "Al"];
+    const filas = costosPorSector.map(c => [
+      c.nombre, c.fertirriego.toFixed(2), c.foliar.toFixed(2), c.suelo.toFixed(2), c.total.toFixed(2), repDesde, repHasta,
+    ]);
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `costos_fertilizacion_${repDesde}_a_${repHasta}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarCurvaCSV() {
+    const encabezado = ["Sector", "Sem. fenológica", "N (kg/ha)", "P (kg/ha)", "K (kg/ha)", "Ca (kg/ha)", "Mg (kg/ha)", "S (kg/ha)"];
+    const filas = curvaNutricional.map(c => [
+      c.nombreSector, c.semana,
+      c.nPorHa.toFixed(2), c.pPorHa.toFixed(2), c.kPorHa.toFixed(2),
+      c.caPorHa.toFixed(2), c.mgPorHa.toFixed(2), c.sPorHa.toFixed(2),
+    ]);
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `curva_nutricional_${repDesde}_a_${repHasta}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -711,7 +806,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.21</div>
+            <div style={S.version}>v0.3.22</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1472,6 +1567,72 @@ export default function Fertilizaciones() {
                     </div>
                   ))}
                   <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarModificacionesCSV}>
+                    ⬇️ Exportar a Excel (CSV)
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* --- Costos de fertilización y foliares --- */}
+            <div style={S.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <div style={S.seccionTitulo}>Costos de fertilización y foliares</div>
+                {costosPorSector.length > 0 && (
+                  <span style={{ fontSize: 14, fontWeight: 800, color: "#7fbf5a" }}>
+                    ${costoTotalGeneral.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                )}
+              </div>
+              {costosPorSector.length === 0 ? (
+                <div style={S.empty}>Sin aplicaciones confirmadas en este periodo.</div>
+              ) : (
+                <>
+                  {costosPorSector.map(c => (
+                    <div key={c.nombre} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                        <span style={{ color: "#e8f5e0" }}>{c.nombre}</span>
+                        <span style={{ fontWeight: 800, color: "#7fbf5a" }}>
+                          ${c.total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
+                        {c.fertirriego > 0 && `Fertirriego $${c.fertirriego.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`}
+                        {c.foliar > 0 && `${c.fertirriego > 0 ? " · " : ""}Foliar $${c.foliar.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`}
+                        {c.suelo > 0 && `${(c.fertirriego > 0 || c.foliar > 0) ? " · " : ""}Suelo $${c.suelo.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`}
+                      </div>
+                    </div>
+                  ))}
+                  <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarCostosCSV}>
+                    ⬇️ Exportar a Excel (CSV)
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* --- Curva nutricional por sector y semana fenológica --- */}
+            <div style={S.card}>
+              <div style={S.seccionTitulo}>Curva nutricional (kg/ha por semana fenológica)</div>
+              {curvaNutricional.length === 0 ? (
+                <div style={S.empty}>Sin datos suficientes (requiere aplicaciones confirmadas en sectores con ciclo activo).</div>
+              ) : (
+                <>
+                  {curvaNutricional.map((c, i) => (
+                    <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ fontSize: 13, color: "#e8f5e0", fontWeight: 600, marginBottom: 3 }}>
+                        {c.nombreSector} · Semana {c.semana}
+                      </div>
+                      <div style={{ fontSize: 11, color: "rgba(200,230,180,0.6)", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <span>N {c.nPorHa.toFixed(2)}</span>
+                        <span>P {c.pPorHa.toFixed(2)}</span>
+                        <span>K {c.kPorHa.toFixed(2)}</span>
+                        <span>Ca {c.caPorHa.toFixed(2)}</span>
+                        <span>Mg {c.mgPorHa.toFixed(2)}</span>
+                        <span>S {c.sPorHa.toFixed(2)}</span>
+                        <span style={{ color: "rgba(200,230,180,0.4)" }}>kg/ha</span>
+                      </div>
+                    </div>
+                  ))}
+                  <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarCurvaCSV}>
                     ⬇️ Exportar a Excel (CSV)
                   </button>
                 </>
