@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.22 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.24 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -190,6 +190,7 @@ export default function Fertilizaciones() {
   const [repRanchoId, setRepRanchoId] = useState("todos");
   const [repFert, setRepFert] = useState([]);
   const [repFertDet, setRepFertDet] = useState([]);
+  const [repMediciones, setRepMediciones] = useState([]);
   const [cargandoReporte, setCargandoReporte] = useState(false);
 
 
@@ -277,12 +278,23 @@ export default function Fertilizaciones() {
     let qf = supabase.from("fertilizaciones").select("*")
       .gte("fecha_recomendada", repDesde)
       .lte("fecha_recomendada", repHasta);
-    if (esEncargado) qf = qf.eq("rancho_id", usuarioActual.rancho_id);
-    else if (repRanchoId !== "todos") qf = qf.eq("rancho_id", repRanchoId);
+    let qm = supabase.from("mediciones_campo").select("*")
+      .gte("fecha", `${repDesde}T00:00:00`)
+      .lte("fecha", `${repHasta}T23:59:59`)
+      .order("fecha", { ascending: true });
+    if (esEncargado) {
+      qf = qf.eq("rancho_id", usuarioActual.rancho_id);
+      qm = qm.eq("rancho_id", usuarioActual.rancho_id);
+    } else if (repRanchoId !== "todos") {
+      qf = qf.eq("rancho_id", repRanchoId);
+      qm = qm.eq("rancho_id", repRanchoId);
+    }
 
-    const { data: fData, error: e1 } = await qf;
+    const [{ data: fData, error: e1 }, { data: mData, error: e3 }] = await Promise.all([qf, qm]);
     if (e1) { setError(e1.message); setCargandoReporte(false); return; }
+    if (e3) { setError(e3.message); setCargandoReporte(false); return; }
     setRepFert(fData || []);
+    setRepMediciones(mData || []);
 
     const ids = (fData || []).map(f => f.id);
     if (ids.length === 0) { setRepFertDet([]); setCargandoReporte(false); return; }
@@ -398,11 +410,41 @@ export default function Fertilizaciones() {
         return {
           ...v,
           nombreSector: info ? `${info.rancho} · ${info.sector}` : "Sector",
+          etapa: info?.etapa || null,
           nPorHa: v.n / ha, pPorHa: v.p / ha, kPorHa: v.k / ha,
           caPorHa: v.ca / ha, mgPorHa: v.mg / ha, sPorHa: v.s / ha,
         };
       })
       .sort((a, b) => a.nombreSector.localeCompare(b.nombreSector) || a.semana - b.semana);
+  })();
+
+  // ---- Curva CE / pH / humedad por sector y periodo ----
+  const curvaCEPH = (() => {
+    const mapa = {};
+    repMediciones.forEach(m => {
+      const key = m.sector_id || `rancho-${m.rancho_id}`;
+      if (!mapa[key]) mapa[key] = { sector_id: m.sector_id, rancho_id: m.rancho_id, lecturas: [] };
+      mapa[key].lecturas.push(m);
+    });
+    const promedio = arr => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null;
+    return Object.values(mapa)
+      .map(v => {
+        const info = sectorInfo(v.sector_id);
+        const lecturas = v.lecturas.slice().sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+        const ceVals = lecturas.filter(l => l.ce != null).map(l => Number(l.ce));
+        const phVals = lecturas.filter(l => l.ph != null).map(l => Number(l.ph));
+        const humVals = lecturas.filter(l => l.humedad_suelo_pct != null).map(l => Number(l.humedad_suelo_pct));
+        return {
+          sector_id: v.sector_id,
+          nombreSector: info ? `${info.rancho} · ${info.sector}` : nombreRancho(v.rancho_id),
+          lecturas,
+          totalLecturas: lecturas.length,
+          ceProm: promedio(ceVals), ceMin: ceVals.length ? Math.min(...ceVals) : null, ceMax: ceVals.length ? Math.max(...ceVals) : null,
+          phProm: promedio(phVals), phMin: phVals.length ? Math.min(...phVals) : null, phMax: phVals.length ? Math.max(...phVals) : null,
+          humProm: promedio(humVals),
+        };
+      })
+      .sort((a, b) => a.nombreSector.localeCompare(b.nombreSector));
   })();
 
   function exportarComparativoCSV() {
@@ -448,9 +490,9 @@ export default function Fertilizaciones() {
   }
 
   function exportarCurvaCSV() {
-    const encabezado = ["Sector", "Sem. fenológica", "N (kg/ha)", "P (kg/ha)", "K (kg/ha)", "Ca (kg/ha)", "Mg (kg/ha)", "S (kg/ha)"];
+    const encabezado = ["Sector", "Etapa", "Sem. fenológica", "N (kg/ha)", "P (kg/ha)", "K (kg/ha)", "Ca (kg/ha)", "Mg (kg/ha)", "S (kg/ha)"];
     const filas = curvaNutricional.map(c => [
-      c.nombreSector, c.semana,
+      c.nombreSector, c.etapa || "", c.semana,
       c.nPorHa.toFixed(2), c.pPorHa.toFixed(2), c.kPorHa.toFixed(2),
       c.caPorHa.toFixed(2), c.mgPorHa.toFixed(2), c.sPorHa.toFixed(2),
     ]);
@@ -459,6 +501,21 @@ export default function Fertilizaciones() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = `curva_nutricional_${repDesde}_a_${repHasta}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarCEPHCSV() {
+    const encabezado = ["Sector", "Fecha", "Tipo de muestra", "CE (dS/m)", "pH", "Humedad (%)"];
+    const filas = curvaCEPH.flatMap(c => c.lecturas.map(l => [
+      c.nombreSector, new Date(l.fecha).toLocaleDateString("es-MX"),
+      MUESTRAS.find(m => m.value === l.tipo_muestra)?.label || l.tipo_muestra,
+      l.ce ?? "", l.ph ?? "", l.humedad_suelo_pct ?? "",
+    ]));
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `curva_ce_ph_humedad_${repDesde}_a_${repHasta}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -806,7 +863,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.22</div>
+            <div style={S.version}>v0.3.24</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1620,6 +1677,7 @@ export default function Fertilizaciones() {
                     <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                       <div style={{ fontSize: 13, color: "#e8f5e0", fontWeight: 600, marginBottom: 3 }}>
                         {c.nombreSector} · Semana {c.semana}
+                        {c.etapa && <span style={{ fontWeight: 400, color: "rgba(200,230,180,0.6)" }}> · {c.etapa}</span>}
                       </div>
                       <div style={{ fontSize: 11, color: "rgba(200,230,180,0.6)", display: "flex", gap: 10, flexWrap: "wrap" }}>
                         <span>N {c.nPorHa.toFixed(2)}</span>
@@ -1633,6 +1691,50 @@ export default function Fertilizaciones() {
                     </div>
                   ))}
                   <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarCurvaCSV}>
+                    ⬇️ Exportar a Excel (CSV)
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* --- Curva CE / pH / humedad --- */}
+            <div style={S.card}>
+              <div style={S.seccionTitulo}>Curva CE / pH / humedad</div>
+              {curvaCEPH.length === 0 ? (
+                <div style={S.empty}>Sin mediciones registradas en este periodo.</div>
+              ) : (
+                <>
+                  {curvaCEPH.map(c => (
+                    <div key={c.sector_id || c.nombreSector} style={{ padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ fontSize: 13, color: "#e8f5e0", fontWeight: 600, marginBottom: 4 }}>
+                        {c.nombreSector} <span style={{ fontWeight: 400, color: "rgba(200,230,180,0.45)" }}>· {c.totalLecturas} lectura{c.totalLecturas !== 1 ? "s" : ""}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "rgba(200,230,180,0.75)", display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 6 }}>
+                        {c.ceProm != null && (
+                          <span>CE prom. <b style={{ color: "#e8f5e0" }}>{c.ceProm.toFixed(2)}</b> ({c.ceMin.toFixed(2)}–{c.ceMax.toFixed(2)}) dS/m</span>
+                        )}
+                        {c.phProm != null && (
+                          <span>pH prom. <b style={{ color: "#e8f5e0" }}>{c.phProm.toFixed(2)}</b> ({c.phMin.toFixed(2)}–{c.phMax.toFixed(2)})</span>
+                        )}
+                        {c.humProm != null && (
+                          <span>💧 Humedad prom. <b style={{ color: "#e8f5e0" }}>{c.humProm.toFixed(1)}%</b></span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        {c.lecturas.map(l => (
+                          <div key={l.id} style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", display: "flex", justifyContent: "space-between" }}>
+                            <span>{new Date(l.fecha).toLocaleDateString("es-MX")} · {MUESTRAS.find(m => m.value === l.tipo_muestra)?.label}</span>
+                            <span>
+                              {l.ce != null && `CE ${Number(l.ce)} `}
+                              {l.ph != null && `pH ${Number(l.ph)} `}
+                              {l.humedad_suelo_pct != null && `💧 ${Number(l.humedad_suelo_pct)}%`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarCEPHCSV}>
                     ⬇️ Exportar a Excel (CSV)
                   </button>
                 </>
