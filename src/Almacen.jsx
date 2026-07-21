@@ -1,9 +1,22 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.13 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.20 ============
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
+
+// ---- Utilidades de fecha para la pestaña de reportes ----
+function todayISOAlmacen() {
+  const d = new Date();
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().split("T")[0];
+}
+function hace30dias() {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().split("T")[0];
+}
 
 // ============ CONSTANTES ============
 const TIPOS_ENTRADA = [
@@ -145,6 +158,13 @@ export default function Almacen() {
   const [editandoProd, setEditandoProd] = useState(null);   // null | "nuevo" | id
   const [formProd, setFormProd]     = useState(FORM_PRODUCTO_INICIAL);
 
+  // ---- Reportes ----
+  const [repDesde, setRepDesde] = useState(hace30dias());
+  const [repHasta, setRepHasta] = useState(todayISOAlmacen());
+  const [repBodegaId, setRepBodegaId] = useState("todas");
+  const [movConsumo, setMovConsumo] = useState([]);
+  const [cargandoReporte, setCargandoReporte] = useState(false);
+
   // ---- 1. Sesión ----
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSesion(data.session));
@@ -204,6 +224,72 @@ export default function Almacen() {
   const unidadProducto = id => productos.find(p => p.id === id)?.unidad_base || "";
   const nombreBodega   = id => bodegas.find(b => b.id === id)?.nombre || "?";
   const productosActivos = productos.filter(p => p.activo);
+
+  // ================= REPORTES =================
+  const cargarConsumo = useCallback(async () => {
+    if (!repDesde || !repHasta) return;
+    setCargandoReporte(true);
+    let q = supabase.from("inventario_movimientos")
+      .select("cantidad, producto_id, bodega_id, creado_en")
+      .eq("tipo_movimiento", "salida_aplicacion")
+      .gte("creado_en", `${repDesde}T00:00:00`)
+      .lte("creado_en", `${repHasta}T23:59:59`);
+    if (esEncargado && bodegaEncargado) q = q.eq("bodega_id", bodegaEncargado.id);
+    else if (repBodegaId !== "todas") q = q.eq("bodega_id", repBodegaId);
+    const { data, error: e } = await q;
+    if (e) { setError(e.message); setCargandoReporte(false); return; }
+    setMovConsumo(data || []);
+    setCargandoReporte(false);
+  }, [repDesde, repHasta, repBodegaId, esEncargado, bodegaEncargado]);
+
+  useEffect(() => {
+    if (pestana === "reportes" && usuarioActual) cargarConsumo();
+  }, [pestana, usuarioActual, cargarConsumo]);
+
+  // Consumo agrupado por producto dentro del rango de fechas
+  const consumoPorProducto = (() => {
+    const mapa = {};
+    movConsumo.forEach(m => {
+      if (!mapa[m.producto_id]) mapa[m.producto_id] = 0;
+      mapa[m.producto_id] += Number(m.cantidad);
+    });
+    return Object.entries(mapa)
+      .map(([producto_id, total]) => ({
+        producto_id, total,
+        nombre: nombreProducto(producto_id),
+        unidad: unidadProducto(producto_id),
+      }))
+      .sort((a, b) => b.total - a.total);
+  })();
+
+  // Existencias visibles en el reporte, agrupadas por bodega (misma
+  // restricción de rol que el resto del módulo)
+  const existenciasReporte = (esEncargado && bodegaEncargado
+    ? existencias.filter(e => e.bodega_id === bodegaEncargado.id)
+    : repBodegaId === "todas" ? existencias : existencias.filter(e => e.bodega_id === repBodegaId)
+  ).filter(e => Number(e.existencia) !== 0);
+
+  function exportarConsumoCSV() {
+    const encabezado = ["Producto", "Unidad", "Cantidad consumida", "Del", "Al"];
+    const filas = consumoPorProducto.map(c => [c.nombre, c.unidad, c.total.toFixed(3), repDesde, repHasta]);
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `consumo_productos_${repDesde}_a_${repHasta}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarExistenciasCSV() {
+    const encabezado = ["Bodega", "Producto", "Existencia", "Unidad"];
+    const filas = existenciasReporte.map(e => [nombreBodega(e.bodega_id), e.producto, Number(e.existencia).toFixed(3), e.unidad_base]);
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `existencias_${todayISOAlmacen()}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
 
   // ================= MOVIMIENTOS =================
   async function guardarMovimiento() {
@@ -434,6 +520,7 @@ export default function Almacen() {
     ...(!soloLectura ? [{ key: "movimiento", label: "🛒 Entradas y ajustes" }] : []),
     { key: "traspasos", label: "🚚 Traspasos" },
     { key: "productos", label: "🏷️ Productos" },
+    { key: "reportes", label: "📈 Reportes" },
   ];
 
   return (
@@ -452,7 +539,7 @@ export default function Almacen() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.13</div>
+            <div style={S.version}>v0.3.20</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -860,6 +947,95 @@ export default function Almacen() {
               </div>
             ))}
             {productosFiltrados.length === 0 && <div style={S.empty}>Ningún producto coincide con la búsqueda.</div>}
+          </div>
+        )}
+
+        {/* ============ REPORTES ============ */}
+        {pestana === "reportes" && (
+          <div>
+            {/* --- Consumo de productos --- */}
+            <div style={S.card}>
+              <div style={S.seccionTitulo}>Consumo de productos</div>
+
+              <div style={S.formRow}>
+                <div style={{ ...S.formGroup, flex: 1 }}>
+                  <label style={S.label}>DEL</label>
+                  <input style={S.select} type="date" value={repDesde} max={repHasta}
+                    onChange={e => setRepDesde(e.target.value)} />
+                </div>
+                <div style={{ ...S.formGroup, flex: 1 }}>
+                  <label style={S.label}>AL</label>
+                  <input style={S.select} type="date" value={repHasta} min={repDesde} max={todayISOAlmacen()}
+                    onChange={e => setRepHasta(e.target.value)} />
+                </div>
+                {!esEncargado && (
+                  <div style={{ ...S.formGroup, flex: 1 }}>
+                    <label style={S.label}>BODEGA</label>
+                    <select style={S.select} value={repBodegaId} onChange={e => setRepBodegaId(e.target.value)}>
+                      <option value="todas">Todas las bodegas</option>
+                      {bodegas.map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {esEncargado && bodegaEncargado && (
+                <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginTop: -8, marginBottom: 12 }}>
+                  Mostrando solo: {bodegaEncargado.nombre}
+                </div>
+              )}
+
+              {cargandoReporte ? (
+                <div style={{ fontSize: 13, color: "rgba(200,230,180,0.5)" }}>Calculando…</div>
+              ) : consumoPorProducto.length === 0 ? (
+                <div style={S.empty}>Sin salidas por aplicación en este periodo.</div>
+              ) : (
+                <>
+                  {consumoPorProducto.map(c => (
+                    <div key={c.producto_id} style={S.cardRow}>
+                      <span>{c.nombre}</span>
+                      <span style={{ fontWeight: 800, color: "#e8f5e0" }}>
+                        {c.total.toLocaleString("es-MX", { maximumFractionDigits: 3 })} {c.unidad}
+                      </span>
+                    </div>
+                  ))}
+                  <button style={{ ...S.btnSecundario, marginTop: 12 }} onClick={exportarConsumoCSV}>
+                    ⬇️ Exportar a Excel (CSV)
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* --- Existencias por bodega --- */}
+            <div style={S.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={S.seccionTitulo}>Existencias actuales</div>
+                <button style={{ ...S.btnSecundario, padding: "6px 12px" }} onClick={exportarExistenciasCSV}>
+                  ⬇️ CSV
+                </button>
+              </div>
+              {existenciasReporte.length === 0 && <div style={S.empty}>Sin existencias registradas.</div>}
+              {bodegas
+                .filter(b => !esEncargado || b.id === bodegaEncargado?.id)
+                .filter(b => repBodegaId === "todas" || esEncargado || b.id === repBodegaId)
+                .map(b => {
+                  const filas = existenciasReporte.filter(e => e.bodega_id === b.id);
+                  if (filas.length === 0) return null;
+                  return (
+                    <div key={b.id} style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "rgba(200,230,180,0.7)", marginBottom: 4 }}>{b.nombre}</div>
+                      {filas.map(e => (
+                        <div key={e.producto_id} style={S.cardRow}>
+                          <span>{e.producto}</span>
+                          <span style={{ fontWeight: 700, color: "#e8f5e0" }}>
+                            {Number(e.existencia).toLocaleString("es-MX")} {e.unidad_base}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+            </div>
           </div>
         )}
 
