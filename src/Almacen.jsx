@@ -1,7 +1,14 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.20 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.21 ============
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
+//
+// v0.3.21 — Buscador de fitosanitarios filtrado por la lista autorizada
+// activa del rancho (ANEBERRIES / comercializadora), en vez del <select>
+// plano con todo el catálogo. Alta de fitosanitario ahora distingue entre
+// "buscar en la lista autorizada" (catálogo ya cargado, solo lectura) y
+// "agregar fuera de lista" (biorracionales caseros sin riesgo de auditoría,
+// requieren justificación). Ver campo en_lista_oficial en productos_fitosanitarios.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
 
@@ -50,6 +57,24 @@ const FORM_PRODUCTO_INICIAL = {
   unidad_base: "kg", presentacion: "", contenido_presentacion: "", costo_unitario: "",
 };
 
+// Formulario simplificado para fitosanitarios "fuera de lista" (biorracionales
+// caseros u otros que no están en ANEBERRIES pero no representan riesgo de
+// auditoría por no contener moléculas restringidas).
+const FORM_FITO_FUERA_LISTA_INICIAL = {
+  nombre_comercial: "", marca: "", ingrediente_activo: "",
+  tipo_fitosanitario: "biorracional", unidad_base: "l",
+  costo_unitario: "", justificacion_fuera_lista: "",
+};
+
+const TIPOS_FITOSANITARIO = [
+  { value: "insecticida", label: "Insecticida" },
+  { value: "fungicida", label: "Fungicida" },
+  { value: "herbicida", label: "Herbicida" },
+  { value: "biorracional", label: "Biorracional" },
+  { value: "regulador_crecimiento", label: "Regulador de crecimiento" },
+  { value: "rodenticida", label: "Rodenticida" },
+];
+
 const ROLES_TXT = {
   admin: "Administrador", encargado: "Encargado",
   agronomo: "Agrónomo", agronomo_externo: "Agrónomo externo",
@@ -82,6 +107,8 @@ const S = {
   seccionTitulo: { fontSize: "14px", fontWeight: "700", color: "#ffffff", marginBottom: "10px" },
   empty: { textAlign: "center", padding: "40px 20px", color: "rgba(200,230,180,0.4)", fontSize: "13px" },
   miniTag: { display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", padding: "2px 8px", borderRadius: "999px", fontWeight: "600" },
+  dropdownBusqueda: { position: "absolute", zIndex: 20, left: 0, right: 0, top: "100%", marginTop: "4px", maxHeight: "260px", overflowY: "auto", background: "#0f2818", border: "1px solid rgba(127,191,90,0.35)", borderRadius: "10px", boxShadow: "0 8px 24px rgba(0,0,0,0.4)" },
+  dropdownItem: { padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)", cursor: "pointer" },
 };
 
 // ============ PANTALLA DE LOGIN ============
@@ -141,6 +168,11 @@ export default function Almacen() {
   const [traspasos, setTraspasos]   = useState([]);
   const [detalles, setDetalles]     = useState([]);
 
+  // ---- Datos para el filtro de fitosanitarios por lista activa del rancho ----
+  const [sectores, setSectores]                 = useState([]);
+  const [listasProductos, setListasProductos]   = useState([]);
+  const [productosFito, setProductosFito]       = useState([]); // productos_fitosanitarios
+
   // ---- Vistas ----
   const [pestana, setPestana] = useState("existencias");
 
@@ -150,6 +182,19 @@ export default function Almacen() {
   const [lineas, setLineas] = useState([{ producto_id: "", cantidad: "" }]);
   const [confirmando, setConfirmando] = useState(null);
   const [recibidas, setRecibidas] = useState({});
+
+  // ---- Buscador de producto (Entradas/ajustes) ----
+  const [buscarProductoMov, setBuscarProductoMov] = useState("");
+  const [mostrarBuscadorMov, setMostrarBuscadorMov] = useState(false);
+
+  // ---- Buscador de producto por línea (Traspasos) ----
+  const [buscarProductoLinea, setBuscarProductoLinea] = useState({}); // { [indice]: texto }
+  const [mostrarBuscadorLinea, setMostrarBuscadorLinea] = useState(null); // indice abierto | null
+
+  // ---- Alta de fitosanitario: elegir catálogo vs fuera de lista ----
+  const [modoAltaFito, setModoAltaFito] = useState(null); // null | "buscar" | "nuevo"
+  const [buscarFitoCatalogo, setBuscarFitoCatalogo] = useState("");
+  const [formFitoNuevo, setFormFitoNuevo] = useState(FORM_FITO_FUERA_LISTA_INICIAL);
 
   // ---- Catálogo de productos ----
   const [buscar, setBuscar]         = useState("");
@@ -194,12 +239,15 @@ export default function Almacen() {
   // ---- 3. Datos del módulo ----
   const cargarDatos = useCallback(async () => {
     setCargando(true);
-    const [b, p, ex, t, d] = await Promise.all([
+    const [b, p, ex, t, d, sec, lp, pf] = await Promise.all([
       supabase.from("bodegas").select("id, nombre, rancho_id, empresa_id").eq("activo", true).order("nombre"),
       supabase.from("productos_insumos").select("*").order("nombre_comercial"),
       supabase.from("inventario_existencias").select("*"),
       supabase.from("traspasos").select("*").order("fecha_envio", { ascending: false }).limit(50),
       supabase.from("traspaso_detalle").select("*"),
+      supabase.from("sectores").select("id, rancho_id, lista_activa_id"),
+      supabase.from("listas_productos").select("lista_id, producto_fitosanitario_id"),
+      supabase.from("productos_fitosanitarios").select("id, producto_id, grupo_quimico, clasificacion_resistencia, tipo_fitosanitario, concentracion_ia, en_lista_oficial, justificacion_fuera_lista"),
     ]);
     setBodegas(b.data || []);
     if (b.data?.length) setEmpresaId(b.data[0].empresa_id);
@@ -207,6 +255,9 @@ export default function Almacen() {
     setExistencias(ex.data || []);
     setTraspasos(t.data || []);
     setDetalles(d.data || []);
+    setSectores(sec.data || []);
+    setListasProductos(lp.data || []);
+    setProductosFito(pf.data || []);
     setCargando(false);
   }, []);
 
@@ -224,6 +275,44 @@ export default function Almacen() {
   const unidadProducto = id => productos.find(p => p.id === id)?.unidad_base || "";
   const nombreBodega   = id => bodegas.find(b => b.id === id)?.nombre || "?";
   const productosActivos = productos.filter(p => p.activo);
+
+  // ---- Ficha fitosanitaria de un producto (join client-side con productos_fitosanitarios) ----
+  const fitoDeProducto = productoId => productosFito.find(f => f.producto_id === productoId) || null;
+
+  // ---- Lista activa del rancho de una bodega (toma la de sus sectores; hoy es uniforme) ----
+  function listaActivaDeRancho(ranchoId) {
+    if (!ranchoId) return null;
+    const s = sectores.find(s => s.rancho_id === ranchoId && s.lista_activa_id);
+    return s ? s.lista_activa_id : null;
+  }
+
+  // ---- Productos fitosanitarios autorizados en la lista activa de un rancho ----
+  function fitosPermitidosEnRancho(ranchoId) {
+    const listaId = listaActivaDeRancho(ranchoId);
+    if (!listaId) return new Set(); // sin lista activa: no se restringe por lista (se maneja en el filtro de abajo)
+    const idsFito = new Set(listasProductos.filter(lp => lp.lista_id === listaId).map(lp => lp.producto_fitosanitario_id));
+    const idsProducto = new Set(
+      productosFito.filter(f => idsFito.has(f.id)).map(f => f.producto_id)
+    );
+    return idsProducto;
+  }
+
+  // ---- Filtra el catálogo activo según la bodega seleccionada (para los buscadores) ----
+  function productosDisponiblesParaBodega(bodegaId, textoBusqueda) {
+    const bodega = bodegas.find(b => b.id === bodegaId);
+    const listaId = bodega ? listaActivaDeRancho(bodega.rancho_id) : null;
+    const permitidosFito = bodega ? fitosPermitidosEnRancho(bodega.rancho_id) : null;
+
+    const q = (textoBusqueda || "").trim().toLowerCase();
+    return productosActivos.filter(p => {
+      if (q && !p.nombre_comercial.toLowerCase().includes(q) && !(p.marca || "").toLowerCase().includes(q)) return false;
+      if (p.categoria !== "fitosanitario") return true; // solo se filtra por lista a los fitosanitarios
+      if (!bodega || !listaId) return true; // sin bodega/lista seleccionada aún: no restringe
+      const ficha = fitoDeProducto(p.id);
+      if (ficha && ficha.en_lista_oficial === false) return true; // fuera de lista: siempre visible
+      return permitidosFito.has(p.id);
+    });
+  }
 
   // ================= REPORTES =================
   const cargarConsumo = useCallback(async () => {
@@ -390,10 +479,26 @@ export default function Almacen() {
   // ================= CATÁLOGO DE PRODUCTOS =================
   function abrirNuevoProducto() {
     setFormProd(FORM_PRODUCTO_INICIAL);
+    setModoAltaFito(null);
+    setBuscarFitoCatalogo("");
+    setFormFitoNuevo(FORM_FITO_FUERA_LISTA_INICIAL);
     setEditandoProd("nuevo");
   }
 
   function abrirEditarProducto(p) {
+    if (p.categoria === "fitosanitario") {
+      const ficha = fitoDeProducto(p.id);
+      setFormFitoNuevo({
+        nombre_comercial: p.nombre_comercial, marca: p.marca || "",
+        ingrediente_activo: p.ingrediente_activo || "",
+        tipo_fitosanitario: ficha?.tipo_fitosanitario || "biorracional",
+        unidad_base: p.unidad_base || "l",
+        costo_unitario: p.costo_unitario || "",
+        justificacion_fuera_lista: ficha?.justificacion_fuera_lista || "",
+      });
+      setEditandoProd(p.id);
+      return;
+    }
     setFormProd({
       nombre_comercial: p.nombre_comercial, marca: p.marca || "",
       categoria: p.categoria,
@@ -445,6 +550,64 @@ export default function Almacen() {
       return setError(e.message);
     }
     avisar(editandoProd === "nuevo" ? "Producto dado de alta." : "Producto actualizado.");
+    setEditandoProd(null);
+    cargarDatos();
+  }
+
+  // ---- Alta / edición de fitosanitario fuera de lista (biorracional casero, etc.) ----
+  async function guardarFitoFueraLista() {
+    if (!formFitoNuevo.nombre_comercial.trim()) return setError("El producto necesita nombre comercial.");
+    if (!formFitoNuevo.justificacion_fuera_lista.trim())
+      return setError("Explica por qué este producto no representa riesgo de auditoría aunque no esté en la lista.");
+
+    const datosProducto = {
+      nombre_comercial: formFitoNuevo.nombre_comercial.trim(),
+      marca: formFitoNuevo.marca.trim() || null,
+      categoria: "fitosanitario",
+      ingrediente_activo: formFitoNuevo.ingrediente_activo.trim() || null,
+      unidad_base: formFitoNuevo.unidad_base,
+      via_foliar: true,
+      costo_unitario: formFitoNuevo.costo_unitario === "" ? 0 : Number(formFitoNuevo.costo_unitario),
+    };
+    const datosFito = {
+      tipo_fitosanitario: formFitoNuevo.tipo_fitosanitario,
+      en_lista_oficial: false,
+      justificacion_fuera_lista: formFitoNuevo.justificacion_fuera_lista.trim(),
+    };
+
+    if (editandoProd === "nuevo") {
+      const { data: nuevoProd, error: e1 } = await supabase.from("productos_insumos")
+        .insert({ ...datosProducto, empresa_id: empresaId, activo: true }).select("id").single();
+      if (e1) {
+        if (e1.message.includes("duplicate")) return setError("Ya existe un producto con ese nombre comercial.");
+        return setError(e1.message);
+      }
+      const { error: e2 } = await supabase.from("productos_fitosanitarios")
+        .insert({ ...datosFito, producto_id: nuevoProd.id });
+      if (e2) return setError(e2.message);
+      avisar("Producto agregado fuera de lista.");
+    } else {
+      const { error: e1 } = await supabase.from("productos_insumos")
+        .update(datosProducto).eq("id", editandoProd);
+      if (e1) return setError(e1.message);
+      const { error: e2 } = await supabase.from("productos_fitosanitarios")
+        .update(datosFito).eq("producto_id", editandoProd);
+      if (e2) return setError(e2.message);
+      avisar("Producto actualizado.");
+    }
+
+    setModoAltaFito(null);
+    setFormFitoNuevo(FORM_FITO_FUERA_LISTA_INICIAL);
+    setEditandoProd(null);
+    cargarDatos();
+  }
+
+  // ---- Actualiza solo el precio de referencia de un fitosanitario de lista oficial ----
+  async function guardarPrecioFito(productoId, nuevoPrecio) {
+    const { error: e } = await supabase.from("productos_insumos")
+      .update({ costo_unitario: nuevoPrecio === "" ? 0 : Number(nuevoPrecio) }).eq("id", productoId);
+    if (e) return setError(e.message);
+    avisar("Precio de referencia actualizado.");
     setEditandoProd(null);
     cargarDatos();
   }
@@ -522,6 +685,15 @@ export default function Almacen() {
     { key: "productos", label: "🏷️ Productos" },
     { key: "reportes", label: "📈 Reportes" },
   ];
+
+  // ---- Contexto del formulario de alta/edición: ¿es un fitosanitario? ----
+  const prodEditando = editandoProd && editandoProd !== "nuevo"
+    ? productos.find(p => p.id === editandoProd) : null;
+  const esFitoContext = editandoProd === "nuevo"
+    ? formProd.categoria === "fitosanitario"
+    : prodEditando?.categoria === "fitosanitario";
+  const fichaEditando = prodEditando ? fitoDeProducto(prodEditando.id) : null;
+  const esFitoFueraDeLista = fichaEditando ? fichaEditando.en_lista_oficial === false : false;
 
   return (
     <div style={S.page}>
@@ -612,19 +784,46 @@ export default function Almacen() {
 
             <div style={S.formGroup}>
               <label style={S.label}>BODEGA</label>
-              <select style={S.select} value={mov.bodega_id} onChange={e => setMov({ ...mov, bodega_id: e.target.value })}>
+              <select style={S.select} value={mov.bodega_id} onChange={e => {
+                setMov({ ...mov, bodega_id: e.target.value, producto_id: "" });
+                setBuscarProductoMov("");
+              }}>
                 <option value="">— Selecciona —</option>
                 {bodegas.filter(b => !esEncargado || b.id === bodegaEncargado?.id)
                   .map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
               </select>
             </div>
 
-            <div style={S.formGroup}>
+            <div style={{ ...S.formGroup, position: "relative" }}>
               <label style={S.label}>PRODUCTO</label>
-              <select style={S.select} value={mov.producto_id} onChange={e => setMov({ ...mov, producto_id: e.target.value })}>
-                <option value="">— Selecciona —</option>
-                {productosActivos.map(p => <option key={p.id} value={p.id}>{p.nombre_comercial}</option>)}
-              </select>
+              <input style={S.select} placeholder={mov.bodega_id ? "🔍 Buscar producto…" : "Primero selecciona una bodega"}
+                disabled={!mov.bodega_id}
+                value={mov.producto_id ? nombreProducto(mov.producto_id) : buscarProductoMov}
+                onFocus={() => { setMov({ ...mov, producto_id: "" }); setBuscarProductoMov(""); setMostrarBuscadorMov(true); }}
+                onChange={e => { setBuscarProductoMov(e.target.value); setMostrarBuscadorMov(true); }}
+              />
+              {mostrarBuscadorMov && mov.bodega_id && (
+                <div style={S.dropdownBusqueda}>
+                  {productosDisponiblesParaBodega(mov.bodega_id, buscarProductoMov).slice(0, 40).map(p => (
+                    <div key={p.id} style={S.dropdownItem}
+                      onClick={() => { setMov({ ...mov, producto_id: p.id }); setMostrarBuscadorMov(false); }}>
+                      <div style={{ fontWeight: 600, color: "#e8f5e0" }}>{p.nombre_comercial}</div>
+                      <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
+                        {CATEGORIAS.find(c => c.value === p.categoria)?.label}
+                        {p.marca && ` · ${p.marca}`}
+                        {fitoDeProducto(p.id)?.en_lista_oficial === false && " · Fuera de lista"}
+                      </div>
+                    </div>
+                  ))}
+                  {productosDisponiblesParaBodega(mov.bodega_id, buscarProductoMov).length === 0 && (
+                    <div style={{ ...S.dropdownItem, color: "rgba(200,230,180,0.4)" }}>
+                      Ningún producto autorizado coincide con la búsqueda.
+                    </div>
+                  )}
+                  <div style={{ ...S.dropdownItem, textAlign: "center", color: "rgba(200,230,180,0.4)", cursor: "pointer" }}
+                    onClick={() => setMostrarBuscadorMov(false)}>Cerrar</div>
+                </div>
+              )}
             </div>
 
             <div style={S.formRow}>
@@ -683,12 +882,29 @@ export default function Almacen() {
 
                 <label style={S.label}>PRODUCTOS</label>
                 {lineas.map((l, i) => (
-                  <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                    <select style={{ ...S.select, flex: 2 }} value={l.producto_id}
-                      onChange={e => cambiarLinea(i, "producto_id", e.target.value)}>
-                      <option value="">— Producto —</option>
-                      {productosActivos.map(p => <option key={p.id} value={p.id}>{p.nombre_comercial}</option>)}
-                    </select>
+                  <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, position: "relative" }}>
+                    <div style={{ flex: 2, position: "relative" }}>
+                      <input style={S.select} placeholder="🔍 Buscar producto…"
+                        value={l.producto_id ? nombreProducto(l.producto_id) : (buscarProductoLinea[i] || "")}
+                        onFocus={() => { cambiarLinea(i, "producto_id", ""); setBuscarProductoLinea({ ...buscarProductoLinea, [i]: "" }); setMostrarBuscadorLinea(i); }}
+                        onChange={e => { setBuscarProductoLinea({ ...buscarProductoLinea, [i]: e.target.value }); setMostrarBuscadorLinea(i); }}
+                      />
+                      {mostrarBuscadorLinea === i && (
+                        <div style={S.dropdownBusqueda}>
+                          {productosDisponiblesParaBodega(null, buscarProductoLinea[i]).slice(0, 40).map(p => (
+                            <div key={p.id} style={S.dropdownItem}
+                              onClick={() => { cambiarLinea(i, "producto_id", p.id); setMostrarBuscadorLinea(null); }}>
+                              <div style={{ fontWeight: 600, color: "#e8f5e0" }}>{p.nombre_comercial}</div>
+                              <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
+                                {CATEGORIAS.find(c => c.value === p.categoria)?.label}{p.marca && ` · ${p.marca}`}
+                              </div>
+                            </div>
+                          ))}
+                          <div style={{ ...S.dropdownItem, textAlign: "center", color: "rgba(200,230,180,0.4)", cursor: "pointer" }}
+                            onClick={() => setMostrarBuscadorLinea(null)}>Cerrar</div>
+                        </div>
+                      )}
+                    </div>
                     <input style={{ ...S.select, flex: 1 }} type="number" min="0" step="0.001"
                       placeholder="Cant." value={l.cantidad}
                       onChange={e => cambiarLinea(i, "cantidad", e.target.value)} />
@@ -780,8 +996,165 @@ export default function Almacen() {
               <button style={S.btnPrimary} onClick={abrirNuevoProducto}>+ Nuevo producto</button>
             )}
 
-            {/* Formulario de alta / edición */}
-            {editandoProd !== null && (
+            {/* Formulario de alta / edición — FITOSANITARIO */}
+            {editandoProd !== null && esFitoContext && (
+              <div style={S.card}>
+                <div style={S.seccionTitulo}>
+                  {editandoProd === "nuevo" ? "Nuevo producto — Fitosanitario" : "Producto fitosanitario"}
+                </div>
+
+                {editandoProd === "nuevo" && (
+                  <div style={S.formGroup}>
+                    <label style={S.label}>CATEGORÍA</label>
+                    <select style={S.select} value={formProd.categoria}
+                      onChange={e => { setFormProd({ ...formProd, categoria: e.target.value }); setModoAltaFito(null); }}>
+                      {CATEGORIAS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                {/* ---- Caso: alta nueva de fitosanitario — elegir modo ---- */}
+                {editandoProd === "nuevo" && modoAltaFito === null && (
+                  <>
+                    <div style={{ fontSize: 12, color: "rgba(200,230,180,0.6)", marginBottom: 12 }}>
+                      La mayoría de los fitosanitarios ya están en el catálogo (listas ANEBERRIES cargadas).
+                      Solo agrega uno nuevo si de verdad no existe y no representa riesgo de auditoría.
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={() => setModoAltaFito("buscar")}>
+                        🔍 Buscar en lista autorizada
+                      </button>
+                      <button style={{ ...S.btnSecundario, flex: 1 }} onClick={() => setModoAltaFito("nuevo")}>
+                        ➕ Agregar fuera de lista
+                      </button>
+                    </div>
+                    <button style={{ ...S.btnSecundario, marginTop: 8, width: "100%" }} onClick={() => setEditandoProd(null)}>Cancelar</button>
+                  </>
+                )}
+
+                {/* ---- Caso: buscar en catálogo ya autorizado (solo consulta) ---- */}
+                {editandoProd === "nuevo" && modoAltaFito === "buscar" && (
+                  <>
+                    <div style={S.formGroup}>
+                      <label style={S.label}>BUSCAR PRODUCTO</label>
+                      <input style={S.select} placeholder="🔍 Nombre comercial…" value={buscarFitoCatalogo}
+                        onChange={e => setBuscarFitoCatalogo(e.target.value)} />
+                    </div>
+                    {buscarFitoCatalogo.trim().length >= 2 ? (
+                      productos.filter(p => p.categoria === "fitosanitario" && p.activo &&
+                        p.nombre_comercial.toLowerCase().includes(buscarFitoCatalogo.trim().toLowerCase()))
+                        .slice(0, 30).map(p => {
+                          const f = fitoDeProducto(p.id);
+                          return (
+                            <div key={p.id} style={{ ...S.card, marginBottom: 8 }}>
+                              <div style={{ fontWeight: 700, color: "#ffffff" }}>{p.nombre_comercial}</div>
+                              <div style={{ fontSize: 12, color: "rgba(200,230,180,0.6)" }}>
+                                {p.ingrediente_activo} · {f?.tipo_fitosanitario}
+                                {f?.en_lista_oficial === false && " · ⚠️ Fuera de lista"}
+                              </div>
+                            </div>
+                          );
+                        })
+                    ) : (
+                      <div style={{ fontSize: 12, color: "rgba(200,230,180,0.4)" }}>Escribe al menos 2 letras para buscar.</div>
+                    )}
+                    <button style={{ ...S.btnSecundario, marginTop: 8, width: "100%" }}
+                      onClick={() => { setModoAltaFito(null); setBuscarFitoCatalogo(""); }}>Regresar</button>
+                  </>
+                )}
+
+                {/* ---- Caso: agregar/editar fuera de lista ---- */}
+                {((editandoProd === "nuevo" && modoAltaFito === "nuevo") || (editandoProd !== "nuevo" && esFitoFueraDeLista)) && (
+                  <>
+                    <div style={S.formRow}>
+                      <div style={{ ...S.formGroup, flex: 2 }}>
+                        <label style={S.label}>NOMBRE COMERCIAL</label>
+                        <input style={S.select} value={formFitoNuevo.nombre_comercial}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, nombre_comercial: e.target.value })} />
+                      </div>
+                      <div style={{ ...S.formGroup, flex: 1 }}>
+                        <label style={S.label}>MARCA</label>
+                        <input style={S.select} value={formFitoNuevo.marca}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, marca: e.target.value })} />
+                      </div>
+                    </div>
+                    <div style={S.formRow}>
+                      <div style={{ ...S.formGroup, flex: 1 }}>
+                        <label style={S.label}>TIPO</label>
+                        <select style={S.select} value={formFitoNuevo.tipo_fitosanitario}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, tipo_fitosanitario: e.target.value })}>
+                          {TIPOS_FITOSANITARIO.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                        </select>
+                      </div>
+                      <div style={{ ...S.formGroup, flex: 1 }}>
+                        <label style={S.label}>UNIDAD BASE</label>
+                        <select style={S.select} value={formFitoNuevo.unidad_base}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, unidad_base: e.target.value })}>
+                          <option value="kg">Kilogramos (kg)</option>
+                          <option value="l">Litros (L)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div style={S.formGroup}>
+                      <label style={S.label}>INGREDIENTE ACTIVO</label>
+                      <input style={S.select} value={formFitoNuevo.ingrediente_activo}
+                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, ingrediente_activo: e.target.value })} />
+                    </div>
+                    <div style={S.formGroup}>
+                      <label style={S.label}>PRECIO ($/{formFitoNuevo.unidad_base})</label>
+                      <input style={S.select} type="number" min="0" step="0.01" value={formFitoNuevo.costo_unitario}
+                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, costo_unitario: e.target.value })} />
+                    </div>
+                    <div style={S.formGroup}>
+                      <label style={S.label}>JUSTIFICACIÓN — POR QUÉ NO REPRESENTA RIESGO DE AUDITORÍA</label>
+                      <input style={S.select} placeholder="ej. Extracto de ajo casero, sin moléculas restringidas"
+                        value={formFitoNuevo.justificacion_fuera_lista}
+                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, justificacion_fuera_lista: e.target.value })} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={guardarFitoFueraLista}>
+                        {editandoProd === "nuevo" ? "Dar de alta fuera de lista" : "Guardar cambios"}
+                      </button>
+                      <button style={S.btnSecundario} onClick={() => { setEditandoProd(null); setModoAltaFito(null); }}>Cancelar</button>
+                    </div>
+                  </>
+                )}
+
+                {/* ---- Caso: editar un fitosanitario de la lista oficial (solo precio editable) ---- */}
+                {editandoProd !== "nuevo" && !esFitoFueraDeLista && prodEditando && (
+                  <>
+                    <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginBottom: 12 }}>
+                      Este producto viene de la lista oficial ANEBERRIES — sus datos regulatorios no se editan aquí,
+                      solo el precio de referencia.
+                    </div>
+                    <div style={{ ...S.card, marginBottom: 12 }}>
+                      <div style={{ fontWeight: 700, color: "#ffffff", marginBottom: 6 }}>{prodEditando.nombre_comercial}</div>
+                      <div style={S.cardRow}><span>Ingrediente activo</span><span>{prodEditando.ingrediente_activo || "—"}</span></div>
+                      <div style={S.cardRow}><span>Tipo</span><span>{fichaEditando?.tipo_fitosanitario || "—"}</span></div>
+                      <div style={S.cardRow}><span>Grupo químico</span><span>{fichaEditando?.grupo_quimico || "—"}</span></div>
+                      <div style={S.cardRow}><span>Clasificación resistencia</span><span>{fichaEditando?.clasificacion_resistencia || "—"}</span></div>
+                      <div style={S.cardRow}><span>Concentración</span><span>{fichaEditando?.concentracion_ia || "—"}</span></div>
+                    </div>
+                    <div style={S.formGroup}>
+                      <label style={S.label}>PRECIO DE REFERENCIA ($/{prodEditando.unidad_base})</label>
+                      <input style={S.select} type="number" min="0" step="0.01"
+                        defaultValue={prodEditando.costo_unitario || ""}
+                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, costo_unitario: e.target.value })} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }}
+                        onClick={() => guardarPrecioFito(prodEditando.id, formFitoNuevo.costo_unitario)}>
+                        Guardar precio
+                      </button>
+                      <button style={S.btnSecundario} onClick={() => setEditandoProd(null)}>Cerrar</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Formulario de alta / edición — NUTRICIONAL / BIOESTIMULANTE / COADYUVANTE */}
+            {editandoProd !== null && !esFitoContext && (
               <div style={S.card}>
                 <div style={S.seccionTitulo}>
                   {editandoProd === "nuevo" ? "Nuevo producto" : "Editar producto"}
@@ -913,6 +1286,8 @@ export default function Almacen() {
                     {p.nombre_comercial}
                     {p.marca && <span style={{ fontWeight: 400, color: "rgba(200,230,180,0.5)", fontSize: 12 }}> · {p.marca}</span>}
                     {!p.activo && <span style={{ ...S.miniTag, color: "#e05c5c", background: "rgba(224,92,92,0.15)", marginLeft: 8 }}>Inactivo</span>}
+                    {p.categoria === "fitosanitario" && fitoDeProducto(p.id)?.en_lista_oficial === false &&
+                      <span style={{ ...S.miniTag, color: "#e8a23d", background: "rgba(232,162,61,0.15)", marginLeft: 8 }}>Fuera de lista</span>}
                   </div>
                   <span style={{
                     fontWeight: 800,
