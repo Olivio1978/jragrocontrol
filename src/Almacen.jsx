@@ -2,7 +2,7 @@
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
-//
+//.
 // v0.3.21 — Buscador de fitosanitarios filtrado por la lista autorizada
 // activa del rancho (ANEBERRIES / comercializadora), en vez del <select>
 // plano con todo el catálogo. Alta de fitosanitario ahora distingue entre
