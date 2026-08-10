@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.25 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.27 ============
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
@@ -30,8 +30,40 @@
 // v0.3.25 — Todas las recargas de datos tras guardar (cargarDatos) ahora se
 // esperan con await antes de cerrar el formulario, para evitar que el
 // formulario de edición se abra con datos todavía no refrescados.
+//
+// v0.3.26 — CORRECCIÓN IMPORTANTE: listas_productos ya superó las 1,000 filas
+// (zarzamora + frambuesa + productos fuera de lista), y Supabase corta las
+// consultas en 1,000 filas por default si no se pide explícitamente más. Las
+// filas más recientes (como las de productos fuera de lista) se estaban
+// quedando fuera silenciosamente. Se agregó .limit(5000) a esa consulta y,
+// por seguridad a futuro, también a productos_insumos y productos_fitosanitarios.
+//
+// v0.3.27 — El .limit(5000) de v0.3.26 no bastaba: ese tope también existe del
+// lado del servidor en Supabase (Project Settings > API > Max Rows) y gana
+// sobre lo que pida el cliente. Se reemplaza por fetchTodasLasFilas(), que
+// pagina con .range() en lotes de 1,000 y junta todo — funciona sin depender
+// de ninguna configuración externa, para productos_insumos, listas_productos,
+// productos_fitosanitarios e inventario_existencias.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
+
+// ---- Trae TODAS las filas de una consulta, sin importar el tope de fila que
+// use el proyecto de Supabase del lado del servidor (comúnmente 1,000). Pide
+// en lotes con .range() y los junta — funciona sin tocar ninguna
+// configuración externa, y sigue funcionando aunque la tabla crezca más.
+async function fetchTodasLasFilas(queryFactory, tamanoLote = 1000) {
+  let todas = [];
+  let desde = 0;
+  while (true) {
+    const { data, error } = await queryFactory().range(desde, desde + tamanoLote - 1);
+    if (error) return { data: null, error };
+    if (!data || data.length === 0) break;
+    todas = todas.concat(data);
+    if (data.length < tamanoLote) break; // última página
+    desde += tamanoLote;
+  }
+  return { data: todas, error: null };
+}
 
 // ---- Utilidades de fecha para la pestaña de reportes ----
 function todayISOAlmacen() {
@@ -264,13 +296,13 @@ export default function Almacen() {
     setCargando(true);
     const [b, p, ex, t, d, sec, lp, pf, lst] = await Promise.all([
       supabase.from("bodegas").select("id, nombre, rancho_id, empresa_id").eq("activo", true).order("nombre"),
-      supabase.from("productos_insumos").select("*").order("nombre_comercial"),
-      supabase.from("inventario_existencias").select("*"),
+      fetchTodasLasFilas(() => supabase.from("productos_insumos").select("*").order("nombre_comercial")),
+      fetchTodasLasFilas(() => supabase.from("inventario_existencias").select("*")),
       supabase.from("traspasos").select("*").order("fecha_envio", { ascending: false }).limit(50),
       supabase.from("traspaso_detalle").select("*"),
       supabase.from("sectores").select("id, rancho_id, lista_activa_id"),
-      supabase.from("listas_productos").select("id, lista_id, producto_fitosanitario_id, plaga_comun, plaga_cientifica, dosis_etiqueta, intervalo_seguridad_horas, intervalo_reentrada, observaciones"),
-      supabase.from("productos_fitosanitarios").select("id, producto_id, grupo_quimico, clasificacion_resistencia, tipo_fitosanitario, concentracion_ia, en_lista_oficial"),
+      fetchTodasLasFilas(() => supabase.from("listas_productos").select("id, lista_id, producto_fitosanitario_id, plaga_comun, plaga_cientifica, dosis_etiqueta, intervalo_seguridad_horas, intervalo_reentrada, observaciones")),
+      fetchTodasLasFilas(() => supabase.from("productos_fitosanitarios").select("id, producto_id, grupo_quimico, clasificacion_resistencia, tipo_fitosanitario, concentracion_ia, en_lista_oficial")),
       supabase.from("listas").select("id, especie_id, comercializadora_id, fuente"),
     ]);
     setBodegas(b.data || []);
@@ -785,7 +817,7 @@ export default function Almacen() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.25</div>
+            <div style={S.version}>v0.3.27</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
