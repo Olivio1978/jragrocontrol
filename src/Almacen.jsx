@@ -1,14 +1,18 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.21 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.22 ============
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
-//.
+//
 // v0.3.21 — Buscador de fitosanitarios filtrado por la lista autorizada
 // activa del rancho (ANEBERRIES / comercializadora), en vez del <select>
 // plano con todo el catálogo. Alta de fitosanitario ahora distingue entre
 // "buscar en la lista autorizada" (catálogo ya cargado, solo lectura) y
 // "agregar fuera de lista" (biorracionales caseros sin riesgo de auditoría,
 // requieren justificación). Ver campo en_lista_oficial en productos_fitosanitarios.
+//
+// v0.3.22 — En "Buscar en lista autorizada", seleccionar un producto ahora
+// sí hace algo: abre su ficha completa (misma vista de solo lectura + precio
+// editable que ya existía en Editar), en vez de ser solo una lista sin clic.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
 
@@ -711,7 +715,7 @@ export default function Almacen() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.21</div>
+            <div style={S.version}>v0.3.22</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1046,12 +1050,14 @@ export default function Almacen() {
                         .slice(0, 30).map(p => {
                           const f = fitoDeProducto(p.id);
                           return (
-                            <div key={p.id} style={{ ...S.card, marginBottom: 8 }}>
+                            <div key={p.id} style={{ ...S.card, marginBottom: 8, cursor: "pointer" }}
+                              onClick={() => { setModoAltaFito(null); setBuscarFitoCatalogo(""); abrirEditarProducto(p); }}>
                               <div style={{ fontWeight: 700, color: "#ffffff" }}>{p.nombre_comercial}</div>
                               <div style={{ fontSize: 12, color: "rgba(200,230,180,0.6)" }}>
                                 {p.ingrediente_activo} · {f?.tipo_fitosanitario}
                                 {f?.en_lista_oficial === false && " · ⚠️ Fuera de lista"}
                               </div>
+                              <div style={{ fontSize: 11, color: "rgba(200,230,180,0.4)", marginTop: 4 }}>Toca para ver la ficha completa →</div>
                             </div>
                           );
                         })
