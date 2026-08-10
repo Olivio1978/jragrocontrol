@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.24 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.25 ============
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
@@ -26,6 +26,10 @@
 // especie, creada en v0.4.40). Misma estructura que ya usan los productos de
 // ANEBERRIES, sin duplicar conceptos. productos_fitosanitarios se queda solo
 // con lo intrínseco del químico + en_lista_oficial como bandera rápida.
+//
+// v0.3.25 — Todas las recargas de datos tras guardar (cargarDatos) ahora se
+// esperan con await antes de cerrar el formulario, para evitar que el
+// formulario de edición se abra con datos todavía no refrescados.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
 
@@ -422,7 +426,7 @@ export default function Almacen() {
     if (e) return setError(e.message);
     avisar("Movimiento registrado.");
     setMov({ tipo: "entrada_compra", bodega_id: "", producto_id: "", cantidad: "", costo: "", notas: "" });
-    cargarDatos();
+    await cargarDatos();
   }
 
   // ================= TRASPASOS =================
@@ -458,7 +462,7 @@ export default function Almacen() {
     avisar("Traspaso enviado. Queda en tránsito hasta que el rancho confirme recepción.");
     setTras({ origen: "", destino: "", notas: "" });
     setLineas([{ producto_id: "", cantidad: "" }]);
-    cargarDatos();
+    await cargarDatos();
   }
 
   function abrirConfirmacion(t) {
@@ -483,7 +487,7 @@ export default function Almacen() {
     if (e) return setError(e.message);
     avisar("Recepción confirmada. El stock entró a la bodega.");
     setConfirmando(null);
-    cargarDatos();
+    await cargarDatos();
   }
 
   async function cancelarTraspaso(t) {
@@ -492,7 +496,7 @@ export default function Almacen() {
       .update({ estado: "cancelado" }).eq("id", t.id);
     if (e) return setError(e.message);
     avisar("Traspaso cancelado y producto devuelto al origen.");
-    cargarDatos();
+    await cargarDatos();
   }
 
   function puedeConfirmar(t) {
@@ -594,7 +598,7 @@ export default function Almacen() {
     }
     avisar(editandoProd === "nuevo" ? "Producto dado de alta." : "Producto actualizado.");
     setEditandoProd(null);
-    cargarDatos();
+    await cargarDatos();
   }
 
   // ---- Alta / edición de fitosanitario fuera de lista (biorracional casero, etc.) ----
@@ -669,7 +673,7 @@ export default function Almacen() {
     setModoAltaFito(null);
     setFormFitoNuevo(FORM_FITO_FUERA_LISTA_INICIAL);
     setEditandoProd(null);
-    cargarDatos();
+    await cargarDatos();
   }
 
   // ---- Actualiza solo el precio de referencia de un fitosanitario de lista oficial ----
@@ -679,7 +683,7 @@ export default function Almacen() {
     if (e) return setError(e.message);
     avisar("Precio de referencia actualizado.");
     setEditandoProd(null);
-    cargarDatos();
+    await cargarDatos();
   }
 
   async function alternarProducto(p) {
@@ -691,7 +695,7 @@ export default function Almacen() {
     avisar(p.activo
       ? "Producto desactivado: deja de aparecer en los selectores pero conserva su historial."
       : "Producto reactivado.");
-    cargarDatos();
+    await cargarDatos();
   }
 
   const productosFiltrados = productos
@@ -781,7 +785,7 @@ export default function Almacen() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.24</div>
+            <div style={S.version}>v0.3.25</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
