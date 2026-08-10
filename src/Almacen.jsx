@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.22 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.24 ============
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
@@ -13,6 +13,19 @@
 // v0.3.22 — En "Buscar en lista autorizada", seleccionar un producto ahora
 // sí hace algo: abre su ficha completa (misma vista de solo lectura + precio
 // editable que ya existía en Editar), en vez de ser solo una lista sin clic.
+//
+// v0.3.23 — El formulario de "fuera de lista" ahora captura los mismos campos
+// relevantes que trae la lista oficial: concentración, dosis general,
+// intervalo de seguridad, periodo de reentrada y observaciones de uso
+// (sin LMR, por acuerdo). Nuevas columnas en productos_fitosanitarios.
+//
+// v0.3.24 — Los datos de uso de productos "fuera de lista" (dosis, intervalos,
+// observaciones/justificación) ya NO viven en columnas nuevas de
+// productos_fitosanitarios — se guardan como filas normales de listas_productos,
+// bajo una lista especial "Productor — Fuera de lista oficial" (una por
+// especie, creada en v0.4.40). Misma estructura que ya usan los productos de
+// ANEBERRIES, sin duplicar conceptos. productos_fitosanitarios se queda solo
+// con lo intrínseco del químico + en_lista_oficial como bandera rápida.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
 
@@ -65,8 +78,9 @@ const FORM_PRODUCTO_INICIAL = {
 // caseros u otros que no están en ANEBERRIES pero no representan riesgo de
 // auditoría por no contener moléculas restringidas).
 const FORM_FITO_FUERA_LISTA_INICIAL = {
-  nombre_comercial: "", marca: "", ingrediente_activo: "",
+  nombre_comercial: "", marca: "", ingrediente_activo: "", concentracion_ia: "",
   tipo_fitosanitario: "biorracional", unidad_base: "l",
+  dosis_recomendada: "", intervalo_seguridad_horas: "", intervalo_reentrada: "", observaciones: "",
   costo_unitario: "", justificacion_fuera_lista: "",
 };
 
@@ -176,6 +190,7 @@ export default function Almacen() {
   const [sectores, setSectores]                 = useState([]);
   const [listasProductos, setListasProductos]   = useState([]);
   const [productosFito, setProductosFito]       = useState([]); // productos_fitosanitarios
+  const [listas, setListas]                     = useState([]);
 
   // ---- Vistas ----
   const [pestana, setPestana] = useState("existencias");
@@ -243,15 +258,16 @@ export default function Almacen() {
   // ---- 3. Datos del módulo ----
   const cargarDatos = useCallback(async () => {
     setCargando(true);
-    const [b, p, ex, t, d, sec, lp, pf] = await Promise.all([
+    const [b, p, ex, t, d, sec, lp, pf, lst] = await Promise.all([
       supabase.from("bodegas").select("id, nombre, rancho_id, empresa_id").eq("activo", true).order("nombre"),
       supabase.from("productos_insumos").select("*").order("nombre_comercial"),
       supabase.from("inventario_existencias").select("*"),
       supabase.from("traspasos").select("*").order("fecha_envio", { ascending: false }).limit(50),
       supabase.from("traspaso_detalle").select("*"),
       supabase.from("sectores").select("id, rancho_id, lista_activa_id"),
-      supabase.from("listas_productos").select("lista_id, producto_fitosanitario_id"),
-      supabase.from("productos_fitosanitarios").select("id, producto_id, grupo_quimico, clasificacion_resistencia, tipo_fitosanitario, concentracion_ia, en_lista_oficial, justificacion_fuera_lista"),
+      supabase.from("listas_productos").select("id, lista_id, producto_fitosanitario_id, plaga_comun, plaga_cientifica, dosis_etiqueta, intervalo_seguridad_horas, intervalo_reentrada, observaciones"),
+      supabase.from("productos_fitosanitarios").select("id, producto_id, grupo_quimico, clasificacion_resistencia, tipo_fitosanitario, concentracion_ia, en_lista_oficial"),
+      supabase.from("listas").select("id, especie_id, comercializadora_id, fuente"),
     ]);
     setBodegas(b.data || []);
     if (b.data?.length) setEmpresaId(b.data[0].empresa_id);
@@ -262,10 +278,15 @@ export default function Almacen() {
     setSectores(sec.data || []);
     setListasProductos(lp.data || []);
     setProductosFito(pf.data || []);
+    setListas(lst.data || []);
     setCargando(false);
   }, []);
 
   useEffect(() => { if (usuarioActual) cargarDatos(); }, [usuarioActual, cargarDatos]);
+
+  // ---- Listas "Productor — Fuera de lista oficial" (una por especie, a prueba de futuro) ----
+  const listasProductor = listas.filter(l => l.fuente === "Productor — Fuera de lista oficial");
+
 
   function avisar(texto) { setAviso(texto); setTimeout(() => setAviso(null), 6000); }
 
@@ -492,13 +513,31 @@ export default function Almacen() {
   function abrirEditarProducto(p) {
     if (p.categoria === "fitosanitario") {
       const ficha = fitoDeProducto(p.id);
+      // Datos de uso (dosis, intervalos, observaciones) viven en listas_productos,
+      // bajo la lista "Productor" — tomamos cualquiera de las filas (son iguales
+      // en todas las especies, ya que se guardan siempre juntas).
+      const usoGuardado = ficha
+        ? listasProductos.find(lp => lp.producto_fitosanitario_id === ficha.id && lp.plaga_comun === "Uso general")
+        : null;
+      // La justificación y las notas se guardaron juntas en observaciones — se separan para editar.
+      let justificacion = "", notas = "";
+      if (usoGuardado?.observaciones) {
+        const m = usoGuardado.observaciones.match(/^Justificación \(fuera de lista\): (.*?)(?:\. Notas de uso: (.*))?$/s);
+        if (m) { justificacion = m[1] || ""; notas = m[2] || ""; }
+        else notas = usoGuardado.observaciones;
+      }
       setFormFitoNuevo({
         nombre_comercial: p.nombre_comercial, marca: p.marca || "",
         ingrediente_activo: p.ingrediente_activo || "",
+        concentracion_ia: ficha?.concentracion_ia || "",
         tipo_fitosanitario: ficha?.tipo_fitosanitario || "biorracional",
         unidad_base: p.unidad_base || "l",
+        dosis_recomendada: usoGuardado?.dosis_etiqueta || "",
+        intervalo_seguridad_horas: usoGuardado?.intervalo_seguridad_horas ?? "",
+        intervalo_reentrada: usoGuardado?.intervalo_reentrada ?? "",
+        observaciones: notas,
         costo_unitario: p.costo_unitario || "",
-        justificacion_fuera_lista: ficha?.justificacion_fuera_lista || "",
+        justificacion_fuera_lista: justificacion,
       });
       setEditandoProd(p.id);
       return;
@@ -563,6 +602,8 @@ export default function Almacen() {
     if (!formFitoNuevo.nombre_comercial.trim()) return setError("El producto necesita nombre comercial.");
     if (!formFitoNuevo.justificacion_fuera_lista.trim())
       return setError("Explica por qué este producto no representa riesgo de auditoría aunque no esté en la lista.");
+    if (listasProductor.length === 0)
+      return setError("No existe todavía la lista 'Productor — Fuera de lista oficial'. Corre la migración v0.4.40 primero.");
 
     const datosProducto = {
       nombre_comercial: formFitoNuevo.nombre_comercial.trim(),
@@ -573,12 +614,19 @@ export default function Almacen() {
       via_foliar: true,
       costo_unitario: formFitoNuevo.costo_unitario === "" ? 0 : Number(formFitoNuevo.costo_unitario),
     };
+    // Solo lo intrínseco del químico vive en productos_fitosanitarios.
     const datosFito = {
       tipo_fitosanitario: formFitoNuevo.tipo_fitosanitario,
+      concentracion_ia: formFitoNuevo.concentracion_ia.trim() || null,
       en_lista_oficial: false,
-      justificacion_fuera_lista: formFitoNuevo.justificacion_fuera_lista.trim(),
     };
+    // Justificación + notas de uso van juntas en observaciones, igual que en las listas oficiales.
+    const observacionesCompletas = [
+      `Justificación (fuera de lista): ${formFitoNuevo.justificacion_fuera_lista.trim()}`,
+      formFitoNuevo.observaciones.trim() ? `Notas de uso: ${formFitoNuevo.observaciones.trim()}` : null,
+    ].filter(Boolean).join(". ");
 
+    let productoFitoId;
     if (editandoProd === "nuevo") {
       const { data: nuevoProd, error: e1 } = await supabase.from("productos_insumos")
         .insert({ ...datosProducto, empresa_id: empresaId, activo: true }).select("id").single();
@@ -586,10 +634,10 @@ export default function Almacen() {
         if (e1.message.includes("duplicate")) return setError("Ya existe un producto con ese nombre comercial.");
         return setError(e1.message);
       }
-      const { error: e2 } = await supabase.from("productos_fitosanitarios")
-        .insert({ ...datosFito, producto_id: nuevoProd.id });
+      const { data: nuevoFito, error: e2 } = await supabase.from("productos_fitosanitarios")
+        .insert({ ...datosFito, producto_id: nuevoProd.id }).select("id").single();
       if (e2) return setError(e2.message);
-      avisar("Producto agregado fuera de lista.");
+      productoFitoId = nuevoFito.id;
     } else {
       const { error: e1 } = await supabase.from("productos_insumos")
         .update(datosProducto).eq("id", editandoProd);
@@ -597,9 +645,27 @@ export default function Almacen() {
       const { error: e2 } = await supabase.from("productos_fitosanitarios")
         .update(datosFito).eq("producto_id", editandoProd);
       if (e2) return setError(e2.message);
-      avisar("Producto actualizado.");
+      productoFitoId = fitoDeProducto(editandoProd)?.id;
     }
 
+    // Una fila en listas_productos por cada especie con lista "Productor" — se
+    // borran las anteriores de este producto y se insertan limpias.
+    await supabase.from("listas_productos").delete()
+      .eq("producto_fitosanitario_id", productoFitoId)
+      .in("lista_id", listasProductor.map(l => l.id));
+    const filasUso = listasProductor.map(l => ({
+      lista_id: l.id,
+      producto_fitosanitario_id: productoFitoId,
+      plaga_comun: "Uso general",
+      dosis_etiqueta: formFitoNuevo.dosis_recomendada.trim() || null,
+      intervalo_seguridad_horas: formFitoNuevo.intervalo_seguridad_horas === "" ? null : Number(formFitoNuevo.intervalo_seguridad_horas),
+      intervalo_reentrada: formFitoNuevo.intervalo_reentrada === "" ? null : Number(formFitoNuevo.intervalo_reentrada),
+      observaciones: observacionesCompletas,
+    }));
+    const { error: e3 } = await supabase.from("listas_productos").insert(filasUso);
+    if (e3) return setError(e3.message);
+
+    avisar(editandoProd === "nuevo" ? "Producto agregado fuera de lista." : "Producto actualizado.");
     setModoAltaFito(null);
     setFormFitoNuevo(FORM_FITO_FUERA_LISTA_INICIAL);
     setEditandoProd(null);
@@ -715,7 +781,7 @@ export default function Almacen() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.22</div>
+            <div style={S.version}>v0.3.24</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1101,10 +1167,40 @@ export default function Almacen() {
                         </select>
                       </div>
                     </div>
+                    <div style={S.formRow}>
+                      <div style={{ ...S.formGroup, flex: 2 }}>
+                        <label style={S.label}>INGREDIENTE ACTIVO</label>
+                        <input style={S.select} value={formFitoNuevo.ingrediente_activo}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, ingrediente_activo: e.target.value })} />
+                      </div>
+                      <div style={{ ...S.formGroup, flex: 1 }}>
+                        <label style={S.label}>CONCENTRACIÓN (%)</label>
+                        <input style={S.select} placeholder="ej. 2.5" value={formFitoNuevo.concentracion_ia}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, concentracion_ia: e.target.value })} />
+                      </div>
+                    </div>
                     <div style={S.formGroup}>
-                      <label style={S.label}>INGREDIENTE ACTIVO</label>
-                      <input style={S.select} value={formFitoNuevo.ingrediente_activo}
-                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, ingrediente_activo: e.target.value })} />
+                      <label style={S.label}>DOSIS RECOMENDADA (GENERAL)</label>
+                      <input style={S.select} placeholder="ej. 2-3 L por Ha" value={formFitoNuevo.dosis_recomendada}
+                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, dosis_recomendada: e.target.value })} />
+                    </div>
+                    <div style={S.formRow}>
+                      <div style={{ ...S.formGroup, flex: 1 }}>
+                        <label style={S.label}>INTERVALO DE SEGURIDAD (HRS)</label>
+                        <input style={S.select} type="number" min="0" value={formFitoNuevo.intervalo_seguridad_horas}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, intervalo_seguridad_horas: e.target.value })} />
+                      </div>
+                      <div style={{ ...S.formGroup, flex: 1 }}>
+                        <label style={S.label}>PERIODO DE REENTRADA (HRS)</label>
+                        <input style={S.select} type="number" min="0" value={formFitoNuevo.intervalo_reentrada}
+                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, intervalo_reentrada: e.target.value })} />
+                      </div>
+                    </div>
+                    <div style={S.formGroup}>
+                      <label style={S.label}>OBSERVACIONES DE USO</label>
+                      <input style={S.select} placeholder="ej. Aplicar cada 7 días, preventivo contra araña roja"
+                        value={formFitoNuevo.observaciones}
+                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, observaciones: e.target.value })} />
                     </div>
                     <div style={S.formGroup}>
                       <label style={S.label}>PRECIO ($/{formFitoNuevo.unidad_base})</label>
