@@ -1,69 +1,9 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.27 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.28 ============
 // Módulo Almacén: existencias, entradas/ajustes, traspasos con confirmación
 // de recepción y catálogo completo de productos e insumos.
 // Patrón visual y de sesión tomado de Labores.jsx v0.2.5.
-//
-// v0.3.21 — Buscador de fitosanitarios filtrado por la lista autorizada
-// activa del rancho (ANEBERRIES / comercializadora), en vez del <select>
-// plano con todo el catálogo. Alta de fitosanitario ahora distingue entre
-// "buscar en la lista autorizada" (catálogo ya cargado, solo lectura) y
-// "agregar fuera de lista" (biorracionales caseros sin riesgo de auditoría,
-// requieren justificación). Ver campo en_lista_oficial en productos_fitosanitarios.
-//
-// v0.3.22 — En "Buscar en lista autorizada", seleccionar un producto ahora
-// sí hace algo: abre su ficha completa (misma vista de solo lectura + precio
-// editable que ya existía en Editar), en vez de ser solo una lista sin clic.
-//
-// v0.3.23 — El formulario de "fuera de lista" ahora captura los mismos campos
-// relevantes que trae la lista oficial: concentración, dosis general,
-// intervalo de seguridad, periodo de reentrada y observaciones de uso
-// (sin LMR, por acuerdo). Nuevas columnas en productos_fitosanitarios.
-//
-// v0.3.24 — Los datos de uso de productos "fuera de lista" (dosis, intervalos,
-// observaciones/justificación) ya NO viven en columnas nuevas de
-// productos_fitosanitarios — se guardan como filas normales de listas_productos,
-// bajo una lista especial "Productor — Fuera de lista oficial" (una por
-// especie, creada en v0.4.40). Misma estructura que ya usan los productos de
-// ANEBERRIES, sin duplicar conceptos. productos_fitosanitarios se queda solo
-// con lo intrínseco del químico + en_lista_oficial como bandera rápida.
-//
-// v0.3.25 — Todas las recargas de datos tras guardar (cargarDatos) ahora se
-// esperan con await antes de cerrar el formulario, para evitar que el
-// formulario de edición se abra con datos todavía no refrescados.
-//
-// v0.3.26 — CORRECCIÓN IMPORTANTE: listas_productos ya superó las 1,000 filas
-// (zarzamora + frambuesa + productos fuera de lista), y Supabase corta las
-// consultas en 1,000 filas por default si no se pide explícitamente más. Las
-// filas más recientes (como las de productos fuera de lista) se estaban
-// quedando fuera silenciosamente. Se agregó .limit(5000) a esa consulta y,
-// por seguridad a futuro, también a productos_insumos y productos_fitosanitarios.
-//
-// v0.3.27 — El .limit(5000) de v0.3.26 no bastaba: ese tope también existe del
-// lado del servidor en Supabase (Project Settings > API > Max Rows) y gana
-// sobre lo que pida el cliente. Se reemplaza por fetchTodasLasFilas(), que
-// pagina con .range() en lotes de 1,000 y junta todo — funciona sin depender
-// de ninguna configuración externa, para productos_insumos, listas_productos,
-// productos_fitosanitarios e inventario_existencias.
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
-
-// ---- Trae TODAS las filas de una consulta, sin importar el tope de fila que
-// use el proyecto de Supabase del lado del servidor (comúnmente 1,000). Pide
-// en lotes con .range() y los junta — funciona sin tocar ninguna
-// configuración externa, y sigue funcionando aunque la tabla crezca más.
-async function fetchTodasLasFilas(queryFactory, tamanoLote = 1000) {
-  let todas = [];
-  let desde = 0;
-  while (true) {
-    const { data, error } = await queryFactory().range(desde, desde + tamanoLote - 1);
-    if (error) return { data: null, error };
-    if (!data || data.length === 0) break;
-    todas = todas.concat(data);
-    if (data.length < tamanoLote) break; // última página
-    desde += tamanoLote;
-  }
-  return { data: todas, error: null };
-}
 
 // ---- Utilidades de fecha para la pestaña de reportes ----
 function todayISOAlmacen() {
@@ -110,25 +50,6 @@ const FORM_PRODUCTO_INICIAL = {
   unidad_base: "kg", presentacion: "", contenido_presentacion: "", costo_unitario: "",
 };
 
-// Formulario simplificado para fitosanitarios "fuera de lista" (biorracionales
-// caseros u otros que no están en ANEBERRIES pero no representan riesgo de
-// auditoría por no contener moléculas restringidas).
-const FORM_FITO_FUERA_LISTA_INICIAL = {
-  nombre_comercial: "", marca: "", ingrediente_activo: "", concentracion_ia: "",
-  tipo_fitosanitario: "biorracional", unidad_base: "l",
-  dosis_recomendada: "", intervalo_seguridad_horas: "", intervalo_reentrada: "", observaciones: "",
-  costo_unitario: "", justificacion_fuera_lista: "",
-};
-
-const TIPOS_FITOSANITARIO = [
-  { value: "insecticida", label: "Insecticida" },
-  { value: "fungicida", label: "Fungicida" },
-  { value: "herbicida", label: "Herbicida" },
-  { value: "biorracional", label: "Biorracional" },
-  { value: "regulador_crecimiento", label: "Regulador de crecimiento" },
-  { value: "rodenticida", label: "Rodenticida" },
-];
-
 const ROLES_TXT = {
   admin: "Administrador", encargado: "Encargado",
   agronomo: "Agrónomo", agronomo_externo: "Agrónomo externo",
@@ -161,8 +82,6 @@ const S = {
   seccionTitulo: { fontSize: "14px", fontWeight: "700", color: "#ffffff", marginBottom: "10px" },
   empty: { textAlign: "center", padding: "40px 20px", color: "rgba(200,230,180,0.4)", fontSize: "13px" },
   miniTag: { display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", padding: "2px 8px", borderRadius: "999px", fontWeight: "600" },
-  dropdownBusqueda: { position: "absolute", zIndex: 20, left: 0, right: 0, top: "100%", marginTop: "4px", maxHeight: "260px", overflowY: "auto", background: "#0f2818", border: "1px solid rgba(127,191,90,0.35)", borderRadius: "10px", boxShadow: "0 8px 24px rgba(0,0,0,0.4)" },
-  dropdownItem: { padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)", cursor: "pointer" },
 };
 
 // ============ PANTALLA DE LOGIN ============
@@ -222,12 +141,6 @@ export default function Almacen() {
   const [traspasos, setTraspasos]   = useState([]);
   const [detalles, setDetalles]     = useState([]);
 
-  // ---- Datos para el filtro de fitosanitarios por lista activa del rancho ----
-  const [sectores, setSectores]                 = useState([]);
-  const [listasProductos, setListasProductos]   = useState([]);
-  const [productosFito, setProductosFito]       = useState([]); // productos_fitosanitarios
-  const [listas, setListas]                     = useState([]);
-
   // ---- Vistas ----
   const [pestana, setPestana] = useState("existencias");
 
@@ -235,21 +148,9 @@ export default function Almacen() {
   const [mov, setMov] = useState({ tipo: "entrada_compra", bodega_id: "", producto_id: "", cantidad: "", costo: "", notas: "" });
   const [tras, setTras] = useState({ origen: "", destino: "", notas: "" });
   const [lineas, setLineas] = useState([{ producto_id: "", cantidad: "" }]);
+  const [enviandoTraspaso, setEnviandoTraspaso] = useState(false);
   const [confirmando, setConfirmando] = useState(null);
   const [recibidas, setRecibidas] = useState({});
-
-  // ---- Buscador de producto (Entradas/ajustes) ----
-  const [buscarProductoMov, setBuscarProductoMov] = useState("");
-  const [mostrarBuscadorMov, setMostrarBuscadorMov] = useState(false);
-
-  // ---- Buscador de producto por línea (Traspasos) ----
-  const [buscarProductoLinea, setBuscarProductoLinea] = useState({}); // { [indice]: texto }
-  const [mostrarBuscadorLinea, setMostrarBuscadorLinea] = useState(null); // indice abierto | null
-
-  // ---- Alta de fitosanitario: elegir catálogo vs fuera de lista ----
-  const [modoAltaFito, setModoAltaFito] = useState(null); // null | "buscar" | "nuevo"
-  const [buscarFitoCatalogo, setBuscarFitoCatalogo] = useState("");
-  const [formFitoNuevo, setFormFitoNuevo] = useState(FORM_FITO_FUERA_LISTA_INICIAL);
 
   // ---- Catálogo de productos ----
   const [buscar, setBuscar]         = useState("");
@@ -264,6 +165,17 @@ export default function Almacen() {
   const [repBodegaId, setRepBodegaId] = useState("todas");
   const [movConsumo, setMovConsumo] = useState([]);
   const [cargandoReporte, setCargandoReporte] = useState(false);
+
+  // ---- Movimientos recientes + corrección ----
+  const [recientes, setRecientes] = useState([]);
+  const [corrigiendo, setCorrigiendo] = useState(null);   // id del movimiento abierto
+  const [cantidadCorrecta, setCantidadCorrecta] = useState("");
+
+  // Tipos de movimiento sobre los que tiene sentido ofrecer "Corregir"
+  // (entradas/ajustes de un solo lado; traspasos y aplicaciones tienen
+  // su propio flujo de corrección: cancelar traspaso / editar aplicación)
+  const TIPOS_CORREGIBLES = ["entrada_compra", "entrada_donacion", "ajuste_entrada", "ajuste_salida"];
+
 
   // ---- 1. Sesión ----
   useEffect(() => {
@@ -294,16 +206,13 @@ export default function Almacen() {
   // ---- 3. Datos del módulo ----
   const cargarDatos = useCallback(async () => {
     setCargando(true);
-    const [b, p, ex, t, d, sec, lp, pf, lst] = await Promise.all([
+    const [b, p, ex, t, d, r] = await Promise.all([
       supabase.from("bodegas").select("id, nombre, rancho_id, empresa_id").eq("activo", true).order("nombre"),
-      fetchTodasLasFilas(() => supabase.from("productos_insumos").select("*").order("nombre_comercial")),
-      fetchTodasLasFilas(() => supabase.from("inventario_existencias").select("*")),
+      supabase.from("productos_insumos").select("*").order("nombre_comercial"),
+      supabase.from("inventario_existencias").select("*"),
       supabase.from("traspasos").select("*").order("fecha_envio", { ascending: false }).limit(50),
       supabase.from("traspaso_detalle").select("*"),
-      supabase.from("sectores").select("id, rancho_id, lista_activa_id"),
-      fetchTodasLasFilas(() => supabase.from("listas_productos").select("id, lista_id, producto_fitosanitario_id, plaga_comun, plaga_cientifica, dosis_etiqueta, intervalo_seguridad_horas, intervalo_reentrada, observaciones")),
-      fetchTodasLasFilas(() => supabase.from("productos_fitosanitarios").select("id, producto_id, grupo_quimico, clasificacion_resistencia, tipo_fitosanitario, concentracion_ia, en_lista_oficial")),
-      supabase.from("listas").select("id, especie_id, comercializadora_id, fuente"),
+      supabase.from("inventario_movimientos").select("*").order("creado_en", { ascending: false }).limit(25),
     ]);
     setBodegas(b.data || []);
     if (b.data?.length) setEmpresaId(b.data[0].empresa_id);
@@ -311,18 +220,11 @@ export default function Almacen() {
     setExistencias(ex.data || []);
     setTraspasos(t.data || []);
     setDetalles(d.data || []);
-    setSectores(sec.data || []);
-    setListasProductos(lp.data || []);
-    setProductosFito(pf.data || []);
-    setListas(lst.data || []);
+    setRecientes(r.data || []);
     setCargando(false);
   }, []);
 
   useEffect(() => { if (usuarioActual) cargarDatos(); }, [usuarioActual, cargarDatos]);
-
-  // ---- Listas "Productor — Fuera de lista oficial" (una por especie, a prueba de futuro) ----
-  const listasProductor = listas.filter(l => l.fuente === "Productor — Fuera de lista oficial");
-
 
   function avisar(texto) { setAviso(texto); setTimeout(() => setAviso(null), 6000); }
 
@@ -336,44 +238,6 @@ export default function Almacen() {
   const unidadProducto = id => productos.find(p => p.id === id)?.unidad_base || "";
   const nombreBodega   = id => bodegas.find(b => b.id === id)?.nombre || "?";
   const productosActivos = productos.filter(p => p.activo);
-
-  // ---- Ficha fitosanitaria de un producto (join client-side con productos_fitosanitarios) ----
-  const fitoDeProducto = productoId => productosFito.find(f => f.producto_id === productoId) || null;
-
-  // ---- Lista activa del rancho de una bodega (toma la de sus sectores; hoy es uniforme) ----
-  function listaActivaDeRancho(ranchoId) {
-    if (!ranchoId) return null;
-    const s = sectores.find(s => s.rancho_id === ranchoId && s.lista_activa_id);
-    return s ? s.lista_activa_id : null;
-  }
-
-  // ---- Productos fitosanitarios autorizados en la lista activa de un rancho ----
-  function fitosPermitidosEnRancho(ranchoId) {
-    const listaId = listaActivaDeRancho(ranchoId);
-    if (!listaId) return new Set(); // sin lista activa: no se restringe por lista (se maneja en el filtro de abajo)
-    const idsFito = new Set(listasProductos.filter(lp => lp.lista_id === listaId).map(lp => lp.producto_fitosanitario_id));
-    const idsProducto = new Set(
-      productosFito.filter(f => idsFito.has(f.id)).map(f => f.producto_id)
-    );
-    return idsProducto;
-  }
-
-  // ---- Filtra el catálogo activo según la bodega seleccionada (para los buscadores) ----
-  function productosDisponiblesParaBodega(bodegaId, textoBusqueda) {
-    const bodega = bodegas.find(b => b.id === bodegaId);
-    const listaId = bodega ? listaActivaDeRancho(bodega.rancho_id) : null;
-    const permitidosFito = bodega ? fitosPermitidosEnRancho(bodega.rancho_id) : null;
-
-    const q = (textoBusqueda || "").trim().toLowerCase();
-    return productosActivos.filter(p => {
-      if (q && !p.nombre_comercial.toLowerCase().includes(q) && !(p.marca || "").toLowerCase().includes(q)) return false;
-      if (p.categoria !== "fitosanitario") return true; // solo se filtra por lista a los fitosanitarios
-      if (!bodega || !listaId) return true; // sin bodega/lista seleccionada aún: no restringe
-      const ficha = fitoDeProducto(p.id);
-      if (ficha && ficha.en_lista_oficial === false) return true; // fuera de lista: siempre visible
-      return permitidosFito.has(p.id);
-    });
-  }
 
   // ================= REPORTES =================
   const cargarConsumo = useCallback(async () => {
@@ -458,7 +322,35 @@ export default function Almacen() {
     if (e) return setError(e.message);
     avisar("Movimiento registrado.");
     setMov({ tipo: "entrada_compra", bodega_id: "", producto_id: "", cantidad: "", costo: "", notas: "" });
-    await cargarDatos();
+    cargarDatos();
+  }
+
+  function abrirCorreccion(m) {
+    setCantidadCorrecta(String(m.cantidad));
+    setCorrigiendo(m.id);
+  }
+
+  async function guardarCorreccion(m) {
+    const nueva = Number(cantidadCorrecta);
+    if (isNaN(nueva) || nueva < 0) return setError("Escribe una cantidad válida.");
+    const diferencia = Math.round((nueva - Number(m.cantidad)) * 1000) / 1000;
+    if (diferencia === 0) { setCorrigiendo(null); return; }
+
+    const tipoAjuste = diferencia > 0 ? "ajuste_entrada" : "ajuste_salida";
+    const fechaOriginal = new Date(m.creado_en).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
+    const { error: e } = await supabase.from("inventario_movimientos").insert({
+      empresa_id: empresaId,
+      bodega_id: m.bodega_id,
+      producto_id: m.producto_id,
+      tipo_movimiento: tipoAjuste,
+      cantidad: Math.abs(diferencia),
+      notas: `Corrección de captura del ${fechaOriginal}: quedó en ${Number(m.cantidad)}, cantidad real ${nueva}.`,
+      creado_por: usuarioActual.id,
+    });
+    if (e) return setError(e.message);
+    avisar(`Corregido: ahora refleja ${nueva} ${unidadProducto(m.producto_id)}.`);
+    setCorrigiendo(null);
+    cargarDatos();
   }
 
   // ================= TRASPASOS =================
@@ -473,28 +365,28 @@ export default function Almacen() {
     if (tras.origen === tras.destino) return setError("Origen y destino no pueden ser la misma bodega.");
     const validas = lineas.filter(l => l.producto_id && Number(l.cantidad) > 0);
     if (!validas.length) return setError("Agrega al menos un producto con cantidad.");
+    if (enviandoTraspaso) return; // protege contra doble clic mientras procesa
 
-    const { data: cab, error: e1 } = await supabase.from("traspasos").insert({
-      empresa_id: empresaId,
-      bodega_origen_id: tras.origen,
-      bodega_destino_id: tras.destino,
-      notas: tras.notas || null,
-      enviado_por: usuarioActual.id,
-    }).select("id").single();
-    if (e1) return setError(e1.message);
+    setEnviandoTraspaso(true);
+    const { error: e1 } = await supabase.rpc("fn_crear_traspaso", {
+      p_bodega_origen: tras.origen,
+      p_bodega_destino: tras.destino,
+      p_notas: tras.notas || null,
+      p_enviado_por: usuarioActual.id,
+      p_productos: validas.map(l => ({ producto_id: l.producto_id, cantidad: Number(l.cantidad) })),
+    });
+    setEnviandoTraspaso(false);
 
-    for (const l of validas) {
-      const { error: e2 } = await supabase.from("traspaso_detalle").insert({
-        traspaso_id: cab.id,
-        producto_id: l.producto_id,
-        cantidad_enviada: Number(l.cantidad),
-      });
-      if (e2) return setError(`${nombreProducto(l.producto_id)}: ${e2.message}`);
+    if (e1) {
+      // El mensaje ya trae el detalle exacto de qué producto no alcanzó
+      // — no se movió NADA, es seguro corregir y reintentar.
+      return setError(e1.message);
     }
-    avisar("Traspaso enviado. Queda en tránsito hasta que el rancho confirme recepción.");
+
+    avisar(`✅ Traspaso enviado con ${validas.length} producto${validas.length !== 1 ? "s" : ""}. Nada se movió hasta confirmar que todo tenía stock suficiente. Queda en tránsito hasta que ${nombreBodega(tras.destino)} confirme recepción.`);
     setTras({ origen: "", destino: "", notas: "" });
     setLineas([{ producto_id: "", cantidad: "" }]);
-    await cargarDatos();
+    cargarDatos();
   }
 
   function abrirConfirmacion(t) {
@@ -519,7 +411,7 @@ export default function Almacen() {
     if (e) return setError(e.message);
     avisar("Recepción confirmada. El stock entró a la bodega.");
     setConfirmando(null);
-    await cargarDatos();
+    cargarDatos();
   }
 
   async function cancelarTraspaso(t) {
@@ -528,7 +420,7 @@ export default function Almacen() {
       .update({ estado: "cancelado" }).eq("id", t.id);
     if (e) return setError(e.message);
     avisar("Traspaso cancelado y producto devuelto al origen.");
-    await cargarDatos();
+    cargarDatos();
   }
 
   function puedeConfirmar(t) {
@@ -540,44 +432,10 @@ export default function Almacen() {
   // ================= CATÁLOGO DE PRODUCTOS =================
   function abrirNuevoProducto() {
     setFormProd(FORM_PRODUCTO_INICIAL);
-    setModoAltaFito(null);
-    setBuscarFitoCatalogo("");
-    setFormFitoNuevo(FORM_FITO_FUERA_LISTA_INICIAL);
     setEditandoProd("nuevo");
   }
 
   function abrirEditarProducto(p) {
-    if (p.categoria === "fitosanitario") {
-      const ficha = fitoDeProducto(p.id);
-      // Datos de uso (dosis, intervalos, observaciones) viven en listas_productos,
-      // bajo la lista "Productor" — tomamos cualquiera de las filas (son iguales
-      // en todas las especies, ya que se guardan siempre juntas).
-      const usoGuardado = ficha
-        ? listasProductos.find(lp => lp.producto_fitosanitario_id === ficha.id && lp.plaga_comun === "Uso general")
-        : null;
-      // La justificación y las notas se guardaron juntas en observaciones — se separan para editar.
-      let justificacion = "", notas = "";
-      if (usoGuardado?.observaciones) {
-        const m = usoGuardado.observaciones.match(/^Justificación \(fuera de lista\): (.*?)(?:\. Notas de uso: (.*))?$/s);
-        if (m) { justificacion = m[1] || ""; notas = m[2] || ""; }
-        else notas = usoGuardado.observaciones;
-      }
-      setFormFitoNuevo({
-        nombre_comercial: p.nombre_comercial, marca: p.marca || "",
-        ingrediente_activo: p.ingrediente_activo || "",
-        concentracion_ia: ficha?.concentracion_ia || "",
-        tipo_fitosanitario: ficha?.tipo_fitosanitario || "biorracional",
-        unidad_base: p.unidad_base || "l",
-        dosis_recomendada: usoGuardado?.dosis_etiqueta || "",
-        intervalo_seguridad_horas: usoGuardado?.intervalo_seguridad_horas ?? "",
-        intervalo_reentrada: usoGuardado?.intervalo_reentrada ?? "",
-        observaciones: notas,
-        costo_unitario: p.costo_unitario || "",
-        justificacion_fuera_lista: justificacion,
-      });
-      setEditandoProd(p.id);
-      return;
-    }
     setFormProd({
       nombre_comercial: p.nombre_comercial, marca: p.marca || "",
       categoria: p.categoria,
@@ -630,92 +488,7 @@ export default function Almacen() {
     }
     avisar(editandoProd === "nuevo" ? "Producto dado de alta." : "Producto actualizado.");
     setEditandoProd(null);
-    await cargarDatos();
-  }
-
-  // ---- Alta / edición de fitosanitario fuera de lista (biorracional casero, etc.) ----
-  async function guardarFitoFueraLista() {
-    if (!formFitoNuevo.nombre_comercial.trim()) return setError("El producto necesita nombre comercial.");
-    if (!formFitoNuevo.justificacion_fuera_lista.trim())
-      return setError("Explica por qué este producto no representa riesgo de auditoría aunque no esté en la lista.");
-    if (listasProductor.length === 0)
-      return setError("No existe todavía la lista 'Productor — Fuera de lista oficial'. Corre la migración v0.4.40 primero.");
-
-    const datosProducto = {
-      nombre_comercial: formFitoNuevo.nombre_comercial.trim(),
-      marca: formFitoNuevo.marca.trim() || null,
-      categoria: "fitosanitario",
-      ingrediente_activo: formFitoNuevo.ingrediente_activo.trim() || null,
-      unidad_base: formFitoNuevo.unidad_base,
-      via_foliar: true,
-      costo_unitario: formFitoNuevo.costo_unitario === "" ? 0 : Number(formFitoNuevo.costo_unitario),
-    };
-    // Solo lo intrínseco del químico vive en productos_fitosanitarios.
-    const datosFito = {
-      tipo_fitosanitario: formFitoNuevo.tipo_fitosanitario,
-      concentracion_ia: formFitoNuevo.concentracion_ia.trim() || null,
-      en_lista_oficial: false,
-    };
-    // Justificación + notas de uso van juntas en observaciones, igual que en las listas oficiales.
-    const observacionesCompletas = [
-      `Justificación (fuera de lista): ${formFitoNuevo.justificacion_fuera_lista.trim()}`,
-      formFitoNuevo.observaciones.trim() ? `Notas de uso: ${formFitoNuevo.observaciones.trim()}` : null,
-    ].filter(Boolean).join(". ");
-
-    let productoFitoId;
-    if (editandoProd === "nuevo") {
-      const { data: nuevoProd, error: e1 } = await supabase.from("productos_insumos")
-        .insert({ ...datosProducto, empresa_id: empresaId, activo: true }).select("id").single();
-      if (e1) {
-        if (e1.message.includes("duplicate")) return setError("Ya existe un producto con ese nombre comercial.");
-        return setError(e1.message);
-      }
-      const { data: nuevoFito, error: e2 } = await supabase.from("productos_fitosanitarios")
-        .insert({ ...datosFito, producto_id: nuevoProd.id }).select("id").single();
-      if (e2) return setError(e2.message);
-      productoFitoId = nuevoFito.id;
-    } else {
-      const { error: e1 } = await supabase.from("productos_insumos")
-        .update(datosProducto).eq("id", editandoProd);
-      if (e1) return setError(e1.message);
-      const { error: e2 } = await supabase.from("productos_fitosanitarios")
-        .update(datosFito).eq("producto_id", editandoProd);
-      if (e2) return setError(e2.message);
-      productoFitoId = fitoDeProducto(editandoProd)?.id;
-    }
-
-    // Una fila en listas_productos por cada especie con lista "Productor" — se
-    // borran las anteriores de este producto y se insertan limpias.
-    await supabase.from("listas_productos").delete()
-      .eq("producto_fitosanitario_id", productoFitoId)
-      .in("lista_id", listasProductor.map(l => l.id));
-    const filasUso = listasProductor.map(l => ({
-      lista_id: l.id,
-      producto_fitosanitario_id: productoFitoId,
-      plaga_comun: "Uso general",
-      dosis_etiqueta: formFitoNuevo.dosis_recomendada.trim() || null,
-      intervalo_seguridad_horas: formFitoNuevo.intervalo_seguridad_horas === "" ? null : Number(formFitoNuevo.intervalo_seguridad_horas),
-      intervalo_reentrada: formFitoNuevo.intervalo_reentrada === "" ? null : Number(formFitoNuevo.intervalo_reentrada),
-      observaciones: observacionesCompletas,
-    }));
-    const { error: e3 } = await supabase.from("listas_productos").insert(filasUso);
-    if (e3) return setError(e3.message);
-
-    avisar(editandoProd === "nuevo" ? "Producto agregado fuera de lista." : "Producto actualizado.");
-    setModoAltaFito(null);
-    setFormFitoNuevo(FORM_FITO_FUERA_LISTA_INICIAL);
-    setEditandoProd(null);
-    await cargarDatos();
-  }
-
-  // ---- Actualiza solo el precio de referencia de un fitosanitario de lista oficial ----
-  async function guardarPrecioFito(productoId, nuevoPrecio) {
-    const { error: e } = await supabase.from("productos_insumos")
-      .update({ costo_unitario: nuevoPrecio === "" ? 0 : Number(nuevoPrecio) }).eq("id", productoId);
-    if (e) return setError(e.message);
-    avisar("Precio de referencia actualizado.");
-    setEditandoProd(null);
-    await cargarDatos();
+    cargarDatos();
   }
 
   async function alternarProducto(p) {
@@ -727,7 +500,7 @@ export default function Almacen() {
     avisar(p.activo
       ? "Producto desactivado: deja de aparecer en los selectores pero conserva su historial."
       : "Producto reactivado.");
-    await cargarDatos();
+    cargarDatos();
   }
 
   const productosFiltrados = productos
@@ -784,6 +557,10 @@ export default function Almacen() {
     ? traspasos.filter(t => t.bodega_destino_id === bodegaEncargado.id || t.bodega_origen_id === bodegaEncargado.id)
     : traspasos;
 
+  const recientesVisibles = esEncargado && bodegaEncargado
+    ? recientes.filter(m => m.bodega_id === bodegaEncargado.id)
+    : recientes;
+
   const PESTANAS = [
     { key: "existencias", label: "📊 Existencias" },
     ...(!soloLectura ? [{ key: "movimiento", label: "🛒 Entradas y ajustes" }] : []),
@@ -791,15 +568,6 @@ export default function Almacen() {
     { key: "productos", label: "🏷️ Productos" },
     { key: "reportes", label: "📈 Reportes" },
   ];
-
-  // ---- Contexto del formulario de alta/edición: ¿es un fitosanitario? ----
-  const prodEditando = editandoProd && editandoProd !== "nuevo"
-    ? productos.find(p => p.id === editandoProd) : null;
-  const esFitoContext = editandoProd === "nuevo"
-    ? formProd.categoria === "fitosanitario"
-    : prodEditando?.categoria === "fitosanitario";
-  const fichaEditando = prodEditando ? fitoDeProducto(prodEditando.id) : null;
-  const esFitoFueraDeLista = fichaEditando ? fichaEditando.en_lista_oficial === false : false;
 
   return (
     <div style={S.page}>
@@ -817,7 +585,7 @@ export default function Almacen() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.27</div>
+            <div style={S.version}>v0.3.28</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -890,46 +658,19 @@ export default function Almacen() {
 
             <div style={S.formGroup}>
               <label style={S.label}>BODEGA</label>
-              <select style={S.select} value={mov.bodega_id} onChange={e => {
-                setMov({ ...mov, bodega_id: e.target.value, producto_id: "" });
-                setBuscarProductoMov("");
-              }}>
+              <select style={S.select} value={mov.bodega_id} onChange={e => setMov({ ...mov, bodega_id: e.target.value })}>
                 <option value="">— Selecciona —</option>
                 {bodegas.filter(b => !esEncargado || b.id === bodegaEncargado?.id)
                   .map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
               </select>
             </div>
 
-            <div style={{ ...S.formGroup, position: "relative" }}>
+            <div style={S.formGroup}>
               <label style={S.label}>PRODUCTO</label>
-              <input style={S.select} placeholder={mov.bodega_id ? "🔍 Buscar producto…" : "Primero selecciona una bodega"}
-                disabled={!mov.bodega_id}
-                value={mov.producto_id ? nombreProducto(mov.producto_id) : buscarProductoMov}
-                onFocus={() => { setMov({ ...mov, producto_id: "" }); setBuscarProductoMov(""); setMostrarBuscadorMov(true); }}
-                onChange={e => { setBuscarProductoMov(e.target.value); setMostrarBuscadorMov(true); }}
-              />
-              {mostrarBuscadorMov && mov.bodega_id && (
-                <div style={S.dropdownBusqueda}>
-                  {productosDisponiblesParaBodega(mov.bodega_id, buscarProductoMov).slice(0, 40).map(p => (
-                    <div key={p.id} style={S.dropdownItem}
-                      onClick={() => { setMov({ ...mov, producto_id: p.id }); setMostrarBuscadorMov(false); }}>
-                      <div style={{ fontWeight: 600, color: "#e8f5e0" }}>{p.nombre_comercial}</div>
-                      <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
-                        {CATEGORIAS.find(c => c.value === p.categoria)?.label}
-                        {p.marca && ` · ${p.marca}`}
-                        {fitoDeProducto(p.id)?.en_lista_oficial === false && " · Fuera de lista"}
-                      </div>
-                    </div>
-                  ))}
-                  {productosDisponiblesParaBodega(mov.bodega_id, buscarProductoMov).length === 0 && (
-                    <div style={{ ...S.dropdownItem, color: "rgba(200,230,180,0.4)" }}>
-                      Ningún producto autorizado coincide con la búsqueda.
-                    </div>
-                  )}
-                  <div style={{ ...S.dropdownItem, textAlign: "center", color: "rgba(200,230,180,0.4)", cursor: "pointer" }}
-                    onClick={() => setMostrarBuscadorMov(false)}>Cerrar</div>
-                </div>
-              )}
+              <select style={S.select} value={mov.producto_id} onChange={e => setMov({ ...mov, producto_id: e.target.value })}>
+                <option value="">— Selecciona —</option>
+                {productosActivos.map(p => <option key={p.id} value={p.id}>{p.nombre_comercial}</option>)}
+              </select>
             </div>
 
             <div style={S.formRow}>
@@ -961,6 +702,52 @@ export default function Almacen() {
           </div>
         )}
 
+        {/* ============ MOVIMIENTOS RECIENTES ============ */}
+        {pestana === "movimiento" && !soloLectura && (
+          <div style={S.card}>
+            <div style={S.seccionTitulo}>Movimientos recientes</div>
+            <div style={{ fontSize: 11, color: "rgba(200,230,180,0.45)", marginTop: -8, marginBottom: 10 }}>
+              Revisa aquí mismo lo que acabas de guardar. Si la cantidad quedó mal capturada, usa "Corregir" — no borra el original, agrega el ajuste necesario dejando ambos en el historial.
+            </div>
+
+            {recientesVisibles.length === 0 && <div style={S.empty}>Sin movimientos todavía.</div>}
+
+            {recientesVisibles.map(m => (
+              <div key={m.id} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                  <span style={{ color: "#e8f5e0" }}>
+                    {nombreProducto(m.producto_id)} <span style={{ color: "rgba(200,230,180,0.45)" }}>· {nombreBodega(m.bodega_id)}</span>
+                  </span>
+                  <span style={{ fontWeight: 800, color: "#e8f5e0" }}>
+                    {TIPOS_ENTRADA.find(t => t.value === m.tipo_movimiento)?.label || m.tipo_movimiento}: {Number(m.cantidad)} {unidadProducto(m.producto_id)}
+                  </span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
+                  <span style={{ fontSize: 11, color: "rgba(200,230,180,0.4)" }}>
+                    {new Date(m.creado_en).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}
+                    {m.notas && ` · ${m.notas}`}
+                  </span>
+                  {TIPOS_CORREGIBLES.includes(m.tipo_movimiento) && corrigiendo !== m.id && (
+                    <button style={{ ...S.btnSecundario, padding: "3px 10px", fontSize: 11 }} onClick={() => abrirCorreccion(m)}>
+                      🔧 Corregir
+                    </button>
+                  )}
+                </div>
+
+                {corrigiendo === m.id && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                    <input style={{ ...S.select, width: 110, padding: "6px 10px" }} type="number" min="0" step="0.001"
+                      value={cantidadCorrecta} onChange={e => setCantidadCorrecta(e.target.value)} autoFocus />
+                    <span style={{ fontSize: 12, color: "rgba(200,230,180,0.6)" }}>{unidadProducto(m.producto_id)} — cantidad real</span>
+                    <button style={{ ...S.btnSecundario, padding: "4px 12px" }} onClick={() => guardarCorreccion(m)}>Guardar</button>
+                    <button style={{ ...S.btnSecundario, padding: "4px 12px", color: "#e05c5c" }} onClick={() => setCorrigiendo(null)}>✕</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* ============ TRASPASOS ============ */}
         {pestana === "traspasos" && (
           <div>
@@ -988,29 +775,12 @@ export default function Almacen() {
 
                 <label style={S.label}>PRODUCTOS</label>
                 {lineas.map((l, i) => (
-                  <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, position: "relative" }}>
-                    <div style={{ flex: 2, position: "relative" }}>
-                      <input style={S.select} placeholder="🔍 Buscar producto…"
-                        value={l.producto_id ? nombreProducto(l.producto_id) : (buscarProductoLinea[i] || "")}
-                        onFocus={() => { cambiarLinea(i, "producto_id", ""); setBuscarProductoLinea({ ...buscarProductoLinea, [i]: "" }); setMostrarBuscadorLinea(i); }}
-                        onChange={e => { setBuscarProductoLinea({ ...buscarProductoLinea, [i]: e.target.value }); setMostrarBuscadorLinea(i); }}
-                      />
-                      {mostrarBuscadorLinea === i && (
-                        <div style={S.dropdownBusqueda}>
-                          {productosDisponiblesParaBodega(null, buscarProductoLinea[i]).slice(0, 40).map(p => (
-                            <div key={p.id} style={S.dropdownItem}
-                              onClick={() => { cambiarLinea(i, "producto_id", p.id); setMostrarBuscadorLinea(null); }}>
-                              <div style={{ fontWeight: 600, color: "#e8f5e0" }}>{p.nombre_comercial}</div>
-                              <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
-                                {CATEGORIAS.find(c => c.value === p.categoria)?.label}{p.marca && ` · ${p.marca}`}
-                              </div>
-                            </div>
-                          ))}
-                          <div style={{ ...S.dropdownItem, textAlign: "center", color: "rgba(200,230,180,0.4)", cursor: "pointer" }}
-                            onClick={() => setMostrarBuscadorLinea(null)}>Cerrar</div>
-                        </div>
-                      )}
-                    </div>
+                  <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    <select style={{ ...S.select, flex: 2 }} value={l.producto_id}
+                      onChange={e => cambiarLinea(i, "producto_id", e.target.value)}>
+                      <option value="">— Producto —</option>
+                      {productosActivos.map(p => <option key={p.id} value={p.id}>{p.nombre_comercial}</option>)}
+                    </select>
                     <input style={{ ...S.select, flex: 1 }} type="number" min="0" step="0.001"
                       placeholder="Cant." value={l.cantidad}
                       onChange={e => cambiarLinea(i, "cantidad", e.target.value)} />
@@ -1025,7 +795,13 @@ export default function Almacen() {
                   <input style={S.select} value={tras.notas} onChange={e => setTras({ ...tras, notas: e.target.value })} />
                 </div>
 
-                <button style={S.btnPrimary} onClick={crearTraspaso}>Enviar traspaso</button>
+                <button
+                  style={{ ...S.btnPrimary, opacity: enviandoTraspaso ? 0.6 : 1 }}
+                  disabled={enviandoTraspaso}
+                  onClick={crearTraspaso}
+                >
+                  {enviandoTraspaso ? "Enviando…" : "Enviar traspaso"}
+                </button>
               </div>
             )}
 
@@ -1102,197 +878,8 @@ export default function Almacen() {
               <button style={S.btnPrimary} onClick={abrirNuevoProducto}>+ Nuevo producto</button>
             )}
 
-            {/* Formulario de alta / edición — FITOSANITARIO */}
-            {editandoProd !== null && esFitoContext && (
-              <div style={S.card}>
-                <div style={S.seccionTitulo}>
-                  {editandoProd === "nuevo" ? "Nuevo producto — Fitosanitario" : "Producto fitosanitario"}
-                </div>
-
-                {editandoProd === "nuevo" && (
-                  <div style={S.formGroup}>
-                    <label style={S.label}>CATEGORÍA</label>
-                    <select style={S.select} value={formProd.categoria}
-                      onChange={e => { setFormProd({ ...formProd, categoria: e.target.value }); setModoAltaFito(null); }}>
-                      {CATEGORIAS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                    </select>
-                  </div>
-                )}
-
-                {/* ---- Caso: alta nueva de fitosanitario — elegir modo ---- */}
-                {editandoProd === "nuevo" && modoAltaFito === null && (
-                  <>
-                    <div style={{ fontSize: 12, color: "rgba(200,230,180,0.6)", marginBottom: 12 }}>
-                      La mayoría de los fitosanitarios ya están en el catálogo (listas ANEBERRIES cargadas).
-                      Solo agrega uno nuevo si de verdad no existe y no representa riesgo de auditoría.
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={() => setModoAltaFito("buscar")}>
-                        🔍 Buscar en lista autorizada
-                      </button>
-                      <button style={{ ...S.btnSecundario, flex: 1 }} onClick={() => setModoAltaFito("nuevo")}>
-                        ➕ Agregar fuera de lista
-                      </button>
-                    </div>
-                    <button style={{ ...S.btnSecundario, marginTop: 8, width: "100%" }} onClick={() => setEditandoProd(null)}>Cancelar</button>
-                  </>
-                )}
-
-                {/* ---- Caso: buscar en catálogo ya autorizado (solo consulta) ---- */}
-                {editandoProd === "nuevo" && modoAltaFito === "buscar" && (
-                  <>
-                    <div style={S.formGroup}>
-                      <label style={S.label}>BUSCAR PRODUCTO</label>
-                      <input style={S.select} placeholder="🔍 Nombre comercial…" value={buscarFitoCatalogo}
-                        onChange={e => setBuscarFitoCatalogo(e.target.value)} />
-                    </div>
-                    {buscarFitoCatalogo.trim().length >= 2 ? (
-                      productos.filter(p => p.categoria === "fitosanitario" && p.activo &&
-                        p.nombre_comercial.toLowerCase().includes(buscarFitoCatalogo.trim().toLowerCase()))
-                        .slice(0, 30).map(p => {
-                          const f = fitoDeProducto(p.id);
-                          return (
-                            <div key={p.id} style={{ ...S.card, marginBottom: 8, cursor: "pointer" }}
-                              onClick={() => { setModoAltaFito(null); setBuscarFitoCatalogo(""); abrirEditarProducto(p); }}>
-                              <div style={{ fontWeight: 700, color: "#ffffff" }}>{p.nombre_comercial}</div>
-                              <div style={{ fontSize: 12, color: "rgba(200,230,180,0.6)" }}>
-                                {p.ingrediente_activo} · {f?.tipo_fitosanitario}
-                                {f?.en_lista_oficial === false && " · ⚠️ Fuera de lista"}
-                              </div>
-                              <div style={{ fontSize: 11, color: "rgba(200,230,180,0.4)", marginTop: 4 }}>Toca para ver la ficha completa →</div>
-                            </div>
-                          );
-                        })
-                    ) : (
-                      <div style={{ fontSize: 12, color: "rgba(200,230,180,0.4)" }}>Escribe al menos 2 letras para buscar.</div>
-                    )}
-                    <button style={{ ...S.btnSecundario, marginTop: 8, width: "100%" }}
-                      onClick={() => { setModoAltaFito(null); setBuscarFitoCatalogo(""); }}>Regresar</button>
-                  </>
-                )}
-
-                {/* ---- Caso: agregar/editar fuera de lista ---- */}
-                {((editandoProd === "nuevo" && modoAltaFito === "nuevo") || (editandoProd !== "nuevo" && esFitoFueraDeLista)) && (
-                  <>
-                    <div style={S.formRow}>
-                      <div style={{ ...S.formGroup, flex: 2 }}>
-                        <label style={S.label}>NOMBRE COMERCIAL</label>
-                        <input style={S.select} value={formFitoNuevo.nombre_comercial}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, nombre_comercial: e.target.value })} />
-                      </div>
-                      <div style={{ ...S.formGroup, flex: 1 }}>
-                        <label style={S.label}>MARCA</label>
-                        <input style={S.select} value={formFitoNuevo.marca}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, marca: e.target.value })} />
-                      </div>
-                    </div>
-                    <div style={S.formRow}>
-                      <div style={{ ...S.formGroup, flex: 1 }}>
-                        <label style={S.label}>TIPO</label>
-                        <select style={S.select} value={formFitoNuevo.tipo_fitosanitario}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, tipo_fitosanitario: e.target.value })}>
-                          {TIPOS_FITOSANITARIO.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                        </select>
-                      </div>
-                      <div style={{ ...S.formGroup, flex: 1 }}>
-                        <label style={S.label}>UNIDAD BASE</label>
-                        <select style={S.select} value={formFitoNuevo.unidad_base}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, unidad_base: e.target.value })}>
-                          <option value="kg">Kilogramos (kg)</option>
-                          <option value="l">Litros (L)</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div style={S.formRow}>
-                      <div style={{ ...S.formGroup, flex: 2 }}>
-                        <label style={S.label}>INGREDIENTE ACTIVO</label>
-                        <input style={S.select} value={formFitoNuevo.ingrediente_activo}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, ingrediente_activo: e.target.value })} />
-                      </div>
-                      <div style={{ ...S.formGroup, flex: 1 }}>
-                        <label style={S.label}>CONCENTRACIÓN (%)</label>
-                        <input style={S.select} placeholder="ej. 2.5" value={formFitoNuevo.concentracion_ia}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, concentracion_ia: e.target.value })} />
-                      </div>
-                    </div>
-                    <div style={S.formGroup}>
-                      <label style={S.label}>DOSIS RECOMENDADA (GENERAL)</label>
-                      <input style={S.select} placeholder="ej. 2-3 L por Ha" value={formFitoNuevo.dosis_recomendada}
-                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, dosis_recomendada: e.target.value })} />
-                    </div>
-                    <div style={S.formRow}>
-                      <div style={{ ...S.formGroup, flex: 1 }}>
-                        <label style={S.label}>INTERVALO DE SEGURIDAD (HRS)</label>
-                        <input style={S.select} type="number" min="0" value={formFitoNuevo.intervalo_seguridad_horas}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, intervalo_seguridad_horas: e.target.value })} />
-                      </div>
-                      <div style={{ ...S.formGroup, flex: 1 }}>
-                        <label style={S.label}>PERIODO DE REENTRADA (HRS)</label>
-                        <input style={S.select} type="number" min="0" value={formFitoNuevo.intervalo_reentrada}
-                          onChange={e => setFormFitoNuevo({ ...formFitoNuevo, intervalo_reentrada: e.target.value })} />
-                      </div>
-                    </div>
-                    <div style={S.formGroup}>
-                      <label style={S.label}>OBSERVACIONES DE USO</label>
-                      <input style={S.select} placeholder="ej. Aplicar cada 7 días, preventivo contra araña roja"
-                        value={formFitoNuevo.observaciones}
-                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, observaciones: e.target.value })} />
-                    </div>
-                    <div style={S.formGroup}>
-                      <label style={S.label}>PRECIO ($/{formFitoNuevo.unidad_base})</label>
-                      <input style={S.select} type="number" min="0" step="0.01" value={formFitoNuevo.costo_unitario}
-                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, costo_unitario: e.target.value })} />
-                    </div>
-                    <div style={S.formGroup}>
-                      <label style={S.label}>JUSTIFICACIÓN — POR QUÉ NO REPRESENTA RIESGO DE AUDITORÍA</label>
-                      <input style={S.select} placeholder="ej. Extracto de ajo casero, sin moléculas restringidas"
-                        value={formFitoNuevo.justificacion_fuera_lista}
-                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, justificacion_fuera_lista: e.target.value })} />
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={guardarFitoFueraLista}>
-                        {editandoProd === "nuevo" ? "Dar de alta fuera de lista" : "Guardar cambios"}
-                      </button>
-                      <button style={S.btnSecundario} onClick={() => { setEditandoProd(null); setModoAltaFito(null); }}>Cancelar</button>
-                    </div>
-                  </>
-                )}
-
-                {/* ---- Caso: editar un fitosanitario de la lista oficial (solo precio editable) ---- */}
-                {editandoProd !== "nuevo" && !esFitoFueraDeLista && prodEditando && (
-                  <>
-                    <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginBottom: 12 }}>
-                      Este producto viene de la lista oficial ANEBERRIES — sus datos regulatorios no se editan aquí,
-                      solo el precio de referencia.
-                    </div>
-                    <div style={{ ...S.card, marginBottom: 12 }}>
-                      <div style={{ fontWeight: 700, color: "#ffffff", marginBottom: 6 }}>{prodEditando.nombre_comercial}</div>
-                      <div style={S.cardRow}><span>Ingrediente activo</span><span>{prodEditando.ingrediente_activo || "—"}</span></div>
-                      <div style={S.cardRow}><span>Tipo</span><span>{fichaEditando?.tipo_fitosanitario || "—"}</span></div>
-                      <div style={S.cardRow}><span>Grupo químico</span><span>{fichaEditando?.grupo_quimico || "—"}</span></div>
-                      <div style={S.cardRow}><span>Clasificación resistencia</span><span>{fichaEditando?.clasificacion_resistencia || "—"}</span></div>
-                      <div style={S.cardRow}><span>Concentración</span><span>{fichaEditando?.concentracion_ia || "—"}</span></div>
-                    </div>
-                    <div style={S.formGroup}>
-                      <label style={S.label}>PRECIO DE REFERENCIA ($/{prodEditando.unidad_base})</label>
-                      <input style={S.select} type="number" min="0" step="0.01"
-                        defaultValue={prodEditando.costo_unitario || ""}
-                        onChange={e => setFormFitoNuevo({ ...formFitoNuevo, costo_unitario: e.target.value })} />
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }}
-                        onClick={() => guardarPrecioFito(prodEditando.id, formFitoNuevo.costo_unitario)}>
-                        Guardar precio
-                      </button>
-                      <button style={S.btnSecundario} onClick={() => setEditandoProd(null)}>Cerrar</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Formulario de alta / edición — NUTRICIONAL / BIOESTIMULANTE / COADYUVANTE */}
-            {editandoProd !== null && !esFitoContext && (
+            {/* Formulario de alta / edición */}
+            {editandoProd !== null && (
               <div style={S.card}>
                 <div style={S.seccionTitulo}>
                   {editandoProd === "nuevo" ? "Nuevo producto" : "Editar producto"}
@@ -1424,8 +1011,6 @@ export default function Almacen() {
                     {p.nombre_comercial}
                     {p.marca && <span style={{ fontWeight: 400, color: "rgba(200,230,180,0.5)", fontSize: 12 }}> · {p.marca}</span>}
                     {!p.activo && <span style={{ ...S.miniTag, color: "#e05c5c", background: "rgba(224,92,92,0.15)", marginLeft: 8 }}>Inactivo</span>}
-                    {p.categoria === "fitosanitario" && fitoDeProducto(p.id)?.en_lista_oficial === false &&
-                      <span style={{ ...S.miniTag, color: "#e8a23d", background: "rgba(232,162,61,0.15)", marginLeft: 8 }}>Fuera de lista</span>}
                   </div>
                   <span style={{
                     fontWeight: 800,
@@ -1556,4 +1141,3 @@ export default function Almacen() {
     </div>
   );
 }
-
