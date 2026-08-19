@@ -1,5 +1,11 @@
+// ============ JR AGROCONTROL — Empleados.jsx v0.5.0 ============
+// Módulo 5. Primera versión versionada formalmente.
+// Cambio de esta versión: los tres chequeos de rol que antes comparaban
+// contra "admin" directo ahora usan el helper compartido esAdmin()
+// (src/lib/permisos.js), para que la cuenta superadmin también tenga acceso.
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabaseClient";
+import { esAdmin } from "./lib/permisos";
 
 // ============ CATÁLOGOS FIJOS DE UI ============
 const TIPOS_CONTRATACION = [
@@ -176,9 +182,9 @@ export default function Empleados() {
       });
   }, [sesion]);
 
-  // ---- 3. Catálogos (solo si es admin) ----
+  // ---- 3. Catálogos (solo si es admin o superadmin) ----
   useEffect(() => {
-    if (!usuarioActual || usuarioActual.rol !== "admin") return;
+    if (!usuarioActual || !esAdmin(usuarioActual)) return;
     supabase.from("ranchos").select("id, nombre").eq("activo", true).order("nombre")
       .then(({ data, error }) => { if (!error) setRanchos(data || []); });
     supabase.from("tipos_empleo").select("id, nombre, color").eq("activo", true).order("nombre")
@@ -187,7 +193,7 @@ export default function Empleados() {
 
   // ---- 4. Lista de empleados según filtros ----
   const cargarEmpleados = () => {
-    if (!usuarioActual || usuarioActual.rol !== "admin") return;
+    if (!usuarioActual || !esAdmin(usuarioActual)) return;
     setCargandoLista(true);
     let query = supabase
       .from("empleados")
@@ -435,7 +441,7 @@ export default function Empleados() {
       </div>
     );
   }
-  if (usuarioActual.rol !== "admin") {
+  if (!esAdmin(usuarioActual)) {
     return (
       <div style={styles.page}>
         <div style={styles.container}>
