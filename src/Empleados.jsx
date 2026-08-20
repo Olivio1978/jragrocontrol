@@ -445,7 +445,7 @@ export default function Empleados() {
     return (
       <div style={styles.page}>
         <div style={styles.container}>
-          <div style={styles.eyebrow}>JR AGROCONTROL · EMPLEADOS</div>
+          <div style={styles.eyebrow}>JR AGROCONTROL · EMPLEADOS · v0.5.0</div>
           <h1 style={styles.title}>Acceso restringido</h1>
           <div style={{ ...styles.avisoRestriccion, marginTop: "16px" }}>
             Esta pantalla es exclusiva para el administrador. Tu cuenta tiene rol de {usuarioActual.rol}.
@@ -463,10 +463,10 @@ export default function Empleados() {
         {/* Header */}
         <div style={styles.header}>
           <div>
-            <div style={styles.eyebrow}>JR AGROCONTROL · EMPLEADOS</div>
+            <div style={styles.eyebrow}>JR AGROCONTROL · EMPLEADOS · v0.5.0</div>
             <h1 style={styles.title}>Catálogo de Empleados</h1>
             <div style={styles.usuarioTag}>
-              {usuarioActual.nombre} · admin
+              {usuarioActual.nombre} · {usuarioActual.rol}
               {" · "}
               <button onClick={cerrarSesion} style={styles.logoutLink}>Cerrar sesión</button>
             </div>
@@ -756,4 +756,3 @@ const styles = {
   textarea: { width: "100%", background: "rgba(0,0,0,0.25)", border: "1px solid rgba(127,191,90,0.25)", borderRadius: "10px", padding: "10px 12px", color: "#e8f5e0", fontSize: "13px", minHeight: "70px", fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" },
   modalGuardar: { width: "100%", background: "linear-gradient(135deg, #5aab2e, #3d8c1a)", color: "#ffffff", border: "none", borderRadius: "12px", padding: "14px", fontSize: "14px", fontWeight: "700", cursor: "pointer" },
 };
-
