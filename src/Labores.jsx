@@ -1,6 +1,10 @@
-// ============ JR AGROCONTROL — Labores.jsx v0.2.5 ============
+// ============ JR AGROCONTROL — Labores.jsx v0.2.6 ============
+// v0.2.6: los chequeos de rol que comparaban contra "admin" directo ahora
+// usan el helper compartido esAdmin() (src/lib/permisos.js), para que
+// la cuenta superadmin también tenga acceso.
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabaseClient";
+import { esAdmin } from "./lib/permisos";
 
 // ============ DATOS REALES DE RANCHOS ============
 function generarTuneles(sectorId, numTuneles, surcosPorTunel, tunelesEspeciales = []) {
@@ -512,12 +516,12 @@ export default function Labores() {
             <div style={S.eyebrow}>JR AGROCONTROL · LABORES</div>
             <h1 style={S.title}>Control de Labores</h1>
             <div style={S.usuarioTag}>
-              {usuarioActual?.nombre} · {usuarioActual?.rol === "admin" ? "Administrador" : "Encargado"}
+              {usuarioActual?.nombre} · {esAdmin(usuarioActual) ? "Administrador" : "Encargado"}
             </div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>🌾</div>
-            <div style={S.version}>v0.2.5</div>
+            <div style={S.version}>v0.2.6</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -751,7 +755,7 @@ export default function Labores() {
           <>
             <div style={{ ...S.avanceHeader, marginBottom: "12px" }}>
               <div style={S.seccionTitulo}>Catálogo de labores</div>
-              {usuarioActual?.rol === "admin" && (
+              {esAdmin(usuarioActual) && (
                 <button onClick={() => { setFormLabor(FORM_LABOR_INICIAL); setEditandoLaborId(null); setShowLaborForm(true); }}
                   style={S.btnSecundario}>+ Nueva</button>
               )}
@@ -769,7 +773,7 @@ export default function Labores() {
                         <span style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)" }}>
                           {labor.unidadPago === "tarea" ? "Por tarea" : "Por día"}
                         </span>
-                        {usuarioActual?.rol === "admin" && (
+                        {esAdmin(usuarioActual) && (
                           <button onClick={() => {
                             setFormLabor({ nombre: labor.nombre, unidadPago: labor.unidadPago, icono: labor.icono, color: labor.color, descripcion: labor.descripcion || "", rendimientoEsperado: labor.rendimientoEsperado || "", unidadAvance: labor.unidadAvance || "surcos" });
                             setEditandoLaborId(labor.id);
@@ -802,7 +806,7 @@ export default function Labores() {
                             <span style={{ fontSize: "12px" }}>{t.nombre} · {t.equivalencia} {t.unidadEquivalencia}</span>
                             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                               <span style={{ fontSize: "12px", color: "#7fbf5a" }}>${t.valorTarea}</span>
-                              {usuarioActual?.rol === "admin" && (
+                              {esAdmin(usuarioActual) && (
                                 <button onClick={() => {
                                   setLaborSelec(labor); setEditandoTareaId(t.id);
                                   setFormTarea({ nombre: t.nombre, equivalencia: t.equivalencia, unidadEquivalencia: t.unidadEquivalencia, valorTarea: t.valorTarea });
@@ -811,7 +815,7 @@ export default function Labores() {
                             </div>
                           </div>
                         ))}
-                        {usuarioActual?.rol === "admin" && (
+                        {esAdmin(usuarioActual) && (
                           <button onClick={() => { setLaborSelec(labor); setEditandoTareaId(null); setFormTarea(FORM_TAREA_INICIAL); }}
                             style={{ ...S.btnMiniLink, marginTop: "8px" }}>+ Agregar equivalencia</button>
                         )}
