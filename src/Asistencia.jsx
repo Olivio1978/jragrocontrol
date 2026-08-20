@@ -1,9 +1,13 @@
-// ============ JR AGROCONTROL — Asistencia.jsx v1.1 ============
+// ============ JR AGROCONTROL — Asistencia.jsx v1.2 ============
+// v1.2: los chequeos de rol que comparaban contra "admin" directo ahora
+// usan el helper compartido esAdmin() (src/lib/permisos.js), para que
+// la cuenta superadmin también tenga acceso.
 // v1.1: se incorpora el Reporte Semanal como pestaña interna (antes vivía
 // en el módulo/botón "Reporte" separado, ahora fusionado aquí porque solo
 // tiene sentido dentro de Asistencia). Exclusivo para admin, igual que antes.
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabaseClient";
+import { esAdmin } from "./lib/permisos";
 
 // ============ CONSTANTES DE UI (idénticas al prototipo original) ============
 const INCIDENCIAS = [
@@ -327,7 +331,7 @@ export default function Asistencia() {
   }, [ranchoId, fecha]);
 
   const esHoy = fecha === todayISO();
-  const puedeEditar = usuarioActual?.rol === "admin" || esHoy;
+  const puedeEditar = esAdmin(usuarioActual) || esHoy;
 
   const getRegistro = (empleadoId) =>
     registros[empleadoId] || {
@@ -527,10 +531,13 @@ export default function Asistencia() {
               <button onClick={cerrarSesion} style={styles.logoutLink}>Cerrar sesión</button>
             </div>
           </div>
-          <div style={styles.headerIcon}>👷</div>
+          <div style={{ textAlign: "right" }}>
+            <div style={styles.headerIcon}>👷</div>
+            <div style={styles.version}>v1.2</div>
+          </div>
         </div>
 
-        {usuarioActual.rol === "admin" && (
+        {esAdmin(usuarioActual) && (
           <div style={styles.navTabs}>
             {[
               { key: "captura", label: "📝 Captura" },
@@ -558,7 +565,7 @@ export default function Asistencia() {
           </div>
         )}
 
-        {pestana === "reporte" && usuarioActual.rol === "admin" && (
+        {pestana === "reporte" && esAdmin(usuarioActual) && (
           <ReporteSemanalTab />
         )}
 
@@ -572,7 +579,7 @@ export default function Asistencia() {
               value={ranchoId || ""}
               onChange={(e) => setRanchoId(e.target.value)}
               style={styles.select}
-              disabled={usuarioActual.rol !== "admin" && !!usuarioActual.rancho_id}
+              disabled={!esAdmin(usuarioActual) && !!usuarioActual.rancho_id}
             >
               {ranchos.map((r) => (
                 <option key={r.id} value={r.id}>{r.nombre}</option>
@@ -1150,6 +1157,7 @@ const styles = {
   eyebrow: { fontSize: "11px", letterSpacing: "0.12em", color: "#7fbf5a", marginBottom: "4px", fontWeight: "600" },
   title: { fontSize: "26px", fontWeight: "800", margin: 0, color: "#ffffff" },
   headerIcon: { fontSize: "36px" },
+  version: { fontSize: "10px", color: "rgba(127,191,90,0.5)", textAlign: "right", marginTop: "2px" },
   usuarioTag: { fontSize: "11px", color: "rgba(200,230,180,0.45)", marginTop: "4px" },
   logoutLink: {
     background: "none",
