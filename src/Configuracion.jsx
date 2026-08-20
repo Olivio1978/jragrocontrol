@@ -1,5 +1,11 @@
+// ============ JR AGROCONTROL — Configuracion.jsx v0.6.0 ============
+// Módulo 6. Primera versión versionada formalmente.
+// Cambio de esta versión: los chequeos de rol que comparaban contra
+// "admin" directo ahora usan el helper compartido esAdmin() (src/lib/
+// permisos.js), para que la cuenta superadmin también tenga acceso.
 import { useState, useEffect } from "react";
 import { supabase } from "./lib/supabaseClient";
+import { esAdmin } from "./lib/permisos";
 
 // ============ Login (idéntico al resto de los módulos) ============
 function Login() {
@@ -79,7 +85,7 @@ export default function Configuracion() {
 
   // ---- Ranchos ----
   useEffect(() => {
-    if (!usuarioActual || usuarioActual.rol !== "admin") return;
+    if (!usuarioActual || !esAdmin(usuarioActual)) return;
     supabase.from("ranchos").select("id, nombre").eq("activo", true).order("nombre")
       .then(({ data, error }) => {
         if (error) { setErrorCarga(error.message); return; }
@@ -181,11 +187,12 @@ export default function Configuracion() {
       </div>
     );
   }
-  if (usuarioActual.rol !== "admin") {
+  if (!esAdmin(usuarioActual)) {
     return (
       <div style={styles.page}>
         <div style={styles.container}>
           <div style={styles.eyebrow}>JR AGROCONTROL · CONFIGURACIÓN</div>
+          <div style={styles.version}>v0.6.0</div>
           <h1 style={styles.title}>Acceso restringido</h1>
           <div style={styles.avisoRestriccion}>Esta pantalla es exclusiva para el administrador.</div>
           <button onClick={cerrarSesion} style={{ ...styles.guardarBtn, marginTop: "16px" }}>Cerrar sesión</button>
@@ -202,11 +209,14 @@ export default function Configuracion() {
             <div style={styles.eyebrow}>JR AGROCONTROL · CONFIGURACIÓN</div>
             <h1 style={styles.title}>Horarios y Salarios</h1>
             <div style={styles.usuarioTag}>
-              {usuarioActual.nombre} · admin
+              {usuarioActual.nombre} · {usuarioActual.rol}
               {" · "}<button onClick={cerrarSesion} style={styles.logoutLink}>Cerrar sesión</button>
             </div>
           </div>
-          <div style={styles.headerIcon}>⚙️</div>
+          <div style={{ textAlign: "right" }}>
+            <div style={styles.headerIcon}>⚙️</div>
+            <div style={styles.version}>v0.6.0</div>
+          </div>
         </div>
 
         {errorCarga && (
@@ -300,6 +310,7 @@ const styles = {
   eyebrow: { fontSize: "11px", letterSpacing: "0.12em", color: "#7fbf5a", marginBottom: "4px", fontWeight: "600" },
   title: { fontSize: "26px", fontWeight: "800", margin: 0, color: "#ffffff" },
   headerIcon: { fontSize: "36px" },
+  version: { fontSize: "10px", color: "rgba(127,191,90,0.5)", textAlign: "right", marginTop: "2px" },
   usuarioTag: { fontSize: "11px", color: "rgba(200,230,180,0.55)", marginTop: "4px" },
   logoutLink: { background: "none", border: "none", padding: 0, color: "#e8a23d", fontSize: "11px", textDecoration: "underline", cursor: "pointer", fontFamily: "inherit" },
   avisoRestriccion: { background: "rgba(232,162,61,0.12)", border: "1px solid rgba(232,162,61,0.3)", borderRadius: "12px", padding: "12px 14px", fontSize: "12px", lineHeight: "1.5", color: "#e8a23d", marginBottom: "16px" },
