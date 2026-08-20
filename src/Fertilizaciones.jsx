@@ -1,4 +1,6 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.26 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.27 ============
+// v0.3.27: la variable local esAdmin ahora también reconoce el rol
+// superadmin (dueño de la plataforma), no solo "admin".
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -45,6 +47,7 @@ const EVENTOS_CICLO = [
 const ROLES_TXT = {
   admin: "Administrador", encargado: "Encargado",
   agronomo: "Agrónomo", agronomo_externo: "Agrónomo externo",
+  superadmin: "Super Admin",
 };
 
 const compatible = (p, via) =>
@@ -259,7 +262,7 @@ export default function Fertilizaciones() {
 
   function avisar(texto) { setAviso(texto); setTimeout(() => setAviso(null), 6000); }
 
-  const esAdmin        = usuarioActual?.rol === "admin";
+  const esAdmin        = usuarioActual?.rol === "admin" || usuarioActual?.rol === "superadmin";
   const esAgronomo     = usuarioActual?.rol === "agronomo";
   const esEncargado    = usuarioActual?.rol === "encargado";
   const puedeRecomendar = esAdmin || esAgronomo;
@@ -853,7 +856,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.26</div>
+            <div style={S.version}>v0.3.27</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
