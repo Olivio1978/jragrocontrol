@@ -1,8 +1,7 @@
-// ============ JR AGROCONTROL — App.jsx v0.3.9 ============
-// Se retira el módulo/botón "Reporte" independiente: su contenido (Reporte
-// Semanal de nómina) se fusionó como pestaña dentro de Asistencia.jsx v1.1,
-// exclusiva para admin. El archivo src/ReporteSemanal.jsx ya no se usa
-// (puede eliminarse del proyecto o dejarse sin referenciar).
+// ============ JR AGROCONTROL — App.jsx v0.3.10 ============
+// v0.3.10: se agrega el módulo "Listas Autorizadas" (Módulo 7): carga de
+// listas de productos fitosanitarios permitidos (ANEBERRIES global o
+// comercializadora propia de la empresa), exclusivo para admin/superadmin.
 import { useState } from "react";
 import Asistencia from "./src/Asistencia";
 import Labores from "./src/Labores";
@@ -10,6 +9,7 @@ import Empleados from "./src/Empleados";
 import Configuracion from "./src/Configuracion";
 import Almacen from "./src/Almacen";
 import Fertilizaciones from "./src/Fertilizaciones";
+import ListasAutorizadas from "./src/ListasAutorizadas";
 
 const MODULOS = [
   { key: "asistencia",      label: "Asistencia",      icono: "👷" },
@@ -18,6 +18,7 @@ const MODULOS = [
   { key: "config",          label: "Config",          icono: "⚙️" },
   { key: "almacen",         label: "Almacén",         icono: "📦" },
   { key: "fertilizaciones", label: "Fertilización",   icono: "💧" },
+  { key: "listas",          label: "Listas Autorizadas", icono: "📋" },
 ];
 
 export default function App() {
@@ -58,8 +59,9 @@ export default function App() {
       {modulo === "labores"         && <Labores />}
       {modulo === "empleados"       && <Empleados />}
       {modulo === "config"          && <Configuracion />}
-      {modulo === "almacen"         && <Almacen />}
+      {modulo === "almacen"         && <Almacen onNavigate={setModulo} />}
       {modulo === "fertilizaciones" && <Fertilizaciones />}
+      {modulo === "listas"          && <ListasAutorizadas />}
     </div>
   );
 }
