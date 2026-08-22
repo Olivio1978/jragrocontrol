@@ -1,4 +1,7 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.28 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.29 ============
+// v0.3.29: enlace discreto hacia el módulo Listas Autorizadas desde la
+// pantalla de alta de fitosanitario nuevo (solo visible para admin/
+// superadmin), para cargar una lista completa en vez de un producto suelto.
 // v0.3.28: (1) esAdmin ahora reconoce también el rol superadmin.
 // (2) listaActivaDeRancho() ya no se queda sin restricción cuando ningún
 // sector tiene lista_activa_id fijada a mano — ahora hereda, en orden:
@@ -211,7 +214,7 @@ function Login() {
 }
 
 // ============ COMPONENTE PRINCIPAL ============
-export default function Almacen() {
+export default function Almacen({ onNavigate }) {
   // ---- Sesión ----
   const [sesion, setSesion]             = useState(undefined);
   const [usuarioActual, setUsuarioActual] = useState(null);
@@ -850,7 +853,7 @@ export default function Almacen() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.28</div>
+            <div style={S.version}>v0.3.29</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1168,6 +1171,16 @@ export default function Almacen() {
                       </button>
                     </div>
                     <button style={{ ...S.btnSecundario, marginTop: 8, width: "100%" }} onClick={() => setEditandoProd(null)}>Cancelar</button>
+                    {esAdmin && onNavigate && (
+                      <div style={{ textAlign: "center", marginTop: 14 }}>
+                        <button
+                          onClick={() => onNavigate("listas")}
+                          style={{ background: "none", border: "none", padding: 0, color: "#e8a23d", fontSize: 12, textDecoration: "underline", cursor: "pointer", fontFamily: "inherit" }}
+                        >
+                          ¿Necesitas cargar una lista completa en vez de un producto? Ir a Listas Autorizadas →
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
 
