@@ -1,4 +1,8 @@
-// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.0 ============
+// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.1 ============
+// v0.7.1: se permite crear una lista NUEVA aunque 0 filas del Excel
+// coincidan con el catálogo (era imposible bootstrapear una lista de
+// verdad nueva, ya que el botón se deshabilitaba en 0 coincidencias).
+// Modo "existente" sigue bloqueado en 0, porque ahí no habría nada que hacer.
 // Módulo 7. Carga de listas de productos fitosanitarios autorizados
 // (ANEBERRIES global o comercializadora propia de la empresa).
 //
@@ -296,7 +300,7 @@ export default function ListasAutorizadas() {
       <div style={S.page}>
         <div style={S.container}>
           <div style={S.eyebrow}>JR AGROCONTROL · LISTAS AUTORIZADAS</div>
-          <div style={S.version}>v0.7.0</div>
+          <div style={S.version}>v0.7.1</div>
           <h1 style={S.title}>Acceso restringido</h1>
           <div style={S.avisoRestriccion}>
             Esta pantalla es exclusiva para el administrador. Tu cuenta tiene rol de {usuarioActual.rol}.
@@ -321,7 +325,7 @@ export default function ListasAutorizadas() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📋</div>
-            <div style={S.version}>v0.7.0</div>
+            <div style={S.version}>v0.7.1</div>
           </div>
         </div>
 
@@ -456,8 +460,23 @@ export default function ListasAutorizadas() {
 
                 {errorGuardado && <p style={{ color: "#e05c5c", fontSize: "12px", marginBottom: "8px" }}>{errorGuardado}</p>}
 
-                <button style={S.guardarBtn} disabled={filasListas.length === 0 || guardando} onClick={confirmarYGuardar}>
-                  {guardando ? "Guardando…" : `Confirmar y guardar ${filasListas.length} filas`}
+                {modo === "nueva" && filasListas.length === 0 && (
+                  <div style={{ ...S.avisoRestriccion, marginBottom: "12px" }}>
+                    Ningún producto de este archivo coincide todavía con tu catálogo — normal en una lista completamente nueva.
+                    Puedes crear la lista vacía ahora, crear los productos en el catálogo usando el reporte de abajo, y volver
+                    después con "Agregar a lista existente" para subir el resto.
+                  </div>
+                )}
+                <button
+                  style={S.guardarBtn}
+                  disabled={(modo === "existente" && filasListas.length === 0) || guardando}
+                  onClick={confirmarYGuardar}
+                >
+                  {guardando
+                    ? "Guardando…"
+                    : filasListas.length === 0
+                      ? "Crear lista vacía y continuar después"
+                      : `Confirmar y guardar ${filasListas.length} filas`}
                 </button>
                 <button style={{ ...S.btnSecundario, marginTop: "10px" }} onClick={() => setPaso(3)} disabled={guardando}>Atrás</button>
               </div>
