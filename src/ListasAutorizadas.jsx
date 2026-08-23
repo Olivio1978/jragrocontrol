@@ -1,4 +1,8 @@
-// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.5 ============
+// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.6 ============
+// v0.7.6: fn_cargar_lista renombró su columna de salida lista_id a
+// out_lista_id (colisionaba con la columna real de listas_productos,
+// causaba "column reference lista_id is ambiguous"). Frontend actualizado
+// para leer fila.out_lista_id en vez de fila.lista_id.
 // v0.7.5: nueva sección "Listas activas" visible en el paso 1, arriba de
 // los botones de modo — muestra cada lista activa (especie, comercializadora,
 // revisión, fecha) con su conteo de productos ya cargados. Se refresca sola
@@ -292,7 +296,7 @@ export default function ListasAutorizadas() {
     }
 
     setResultado({
-      listaId: fila?.lista_id,
+      listaId: fila?.out_lista_id,
       insertadas: fila?.insertadas ?? 0,
       productosCreados: fila?.productos_creados ?? 0,
       conflictos: conflictos.length,
@@ -342,7 +346,7 @@ export default function ListasAutorizadas() {
       <div style={S.page}>
         <div style={S.container}>
           <div style={S.eyebrow}>JR AGROCONTROL · LISTAS AUTORIZADAS</div>
-          <div style={S.version}>v0.7.5</div>
+          <div style={S.version}>v0.7.6</div>
           <h1 style={S.title}>Acceso restringido</h1>
           <div style={S.avisoRestriccion}>
             Esta pantalla es exclusiva para el administrador. Tu cuenta tiene rol de {usuarioActual.rol}.
@@ -367,7 +371,7 @@ export default function ListasAutorizadas() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📋</div>
-            <div style={S.version}>v0.7.5</div>
+            <div style={S.version}>v0.7.6</div>
           </div>
         </div>
 
