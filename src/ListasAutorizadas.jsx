@@ -1,4 +1,23 @@
-// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.1 ============
+// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.4 ============
+// v0.7.4: protección contra sobrescritura silenciosa de datos químicos.
+// Cuando un producto ya existe en catálogo (por nombre) y el Excel nuevo
+// trae ingrediente_activo, concentracion_ia, grupo_quimico,
+// clasificacion_resistencia o tipo_fitosanitario DISTINTO a lo ya
+// guardado, esa fila ya no se procesa en silencio reutilizando el dato
+// viejo — se omite y se reporta con el detalle exacto de la discrepancia,
+// para decisión humana (típico caso: reformulación real del fabricante
+// en un producto que ya lleva años en el sistema).
+// v0.7.3: CAMBIO DE FONDO — ya no se omiten filas por "producto no
+// encontrado en catálogo". fn_cargar_lista ahora crea el producto
+// automáticamente si no existe (con los datos que trae el Excel; lo
+// operativo —costo, marca, unidad real— queda pendiente de completar
+// en Almacén al recibir stock). Solo se omiten filas con un problema
+// real de dato: sin nombre comercial, o intervalo de seguridad/
+// reentrada en un formato no reconocido. El resultado final ahora
+// también informa cuántos productos nuevos se dieron de alta.
+// v0.7.2: el mensaje final ya no dice "se guardaron 0 filas" cuando la
+// lista sí se creó correctamente (solo sin productos) — confundía, daba
+// a entender que la operación había fallado.
 // v0.7.1: se permite crear una lista NUEVA aunque 0 filas del Excel
 // coincidan con el catálogo (era imposible bootstrapear una lista de
 // verdad nueva, ya que el botón se deshabilitaba en 0 coincidencias).
@@ -80,14 +99,6 @@ function parsearIntervaloHoras(textoOriginal) {
   return { horas: null, reconocido: false };
 }
 
-// ============ Normalización para emparejar nombres de producto ============
-function normalizar(texto) {
-  return String(texto || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // quita acentos
-}
-
 const COLUMNAS_EXCEL = [
   "nombre_comercial", "ingrediente_activo", "concentracion_ia", "grupo_quimico",
   "clasificacion_resistencia", "tipo_fitosanitario", "plaga_comun", "plaga_cientifica",
@@ -104,7 +115,6 @@ export default function ListasAutorizadas() {
   const [especies, setEspecies] = useState([]);
   const [comercializadoras, setComercializadoras] = useState([]);
   const [listasActivas, setListasActivas] = useState([]);
-  const [productosCatalogo, setProductosCatalogo] = useState([]); // [{id, nombre_comercial}]
   const [cargandoCatalogos, setCargandoCatalogos] = useState(true);
 
   // Estado del asistente
@@ -154,27 +164,23 @@ export default function ListasAutorizadas() {
       supabase.from("especies").select("id, nombre").order("nombre"),
       supabase.from("comercializadoras").select("id, nombre").order("nombre"),
       supabase.from("listas").select("id, especie_id, comercializadora_id, numero_revision, fecha_revision, empresa_id").eq("activo", true),
-      supabase.from("productos_fitosanitarios").select("id, producto_id, productos_insumos(nombre_comercial)"),
-    ]).then(([esp, com, lst, prod]) => {
+    ]).then(([esp, com, lst]) => {
       setCargandoCatalogos(false);
-      const err = esp.error || com.error || lst.error || prod.error;
+      const err = esp.error || com.error || lst.error;
       if (err) { setErrorCarga(err.message); return; }
 
       setEspecies(esp.data || []);
       setComercializadoras(com.data || []);
       setListasActivas(lst.data || []);
-      setProductosCatalogo((prod.data || [])
-        .filter(p => p.productos_insumos?.nombre_comercial)
-        .map(p => ({ id: p.id, nombre_comercial: p.productos_insumos.nombre_comercial })));
     });
   }, [usuarioActual]);
 
-  // ---- Clasificar una fila del Excel contra el catálogo ya cargado ----
+  // ---- Validar una fila del Excel (ya no busca en catálogo — eso lo hace fn_cargar_lista) ----
+  // Solo se omite por un problema real de dato: sin nombre, o intervalo no reconocido.
+  // Si el producto no existe en catálogo, se crea automáticamente al guardar.
   function clasificarFila(fila) {
-    const nombreNorm = normalizar(fila.nombre_comercial);
-    const match = productosCatalogo.find(p => normalizar(p.nombre_comercial) === nombreNorm);
-    if (!match) {
-      return { ok: false, motivo: `Producto no encontrado en catálogo: "${fila.nombre_comercial || "(vacío)"}"` };
+    if (!fila.nombre_comercial || !String(fila.nombre_comercial).trim()) {
+      return { ok: false, motivo: "Falta nombre_comercial" };
     }
     const seg = parsearIntervaloHoras(fila.intervalo_seguridad);
     if (!seg.reconocido) {
@@ -187,7 +193,12 @@ export default function ListasAutorizadas() {
     return {
       ok: true,
       datos: {
-        producto_fitosanitario_id: match.id,
+        nombre_comercial: fila.nombre_comercial,
+        ingrediente_activo: fila.ingrediente_activo || null,
+        concentracion_ia: fila.concentracion_ia || null,
+        grupo_quimico: fila.grupo_quimico || null,
+        clasificacion_resistencia: fila.clasificacion_resistencia || null,
+        tipo_fitosanitario: fila.tipo_fitosanitario || null,
         plaga_comun: fila.plaga_comun || null,
         plaga_cientifica: fila.plaga_cientifica || null,
         dosis_etiqueta: fila.dosis_etiqueta || null,
@@ -255,7 +266,23 @@ export default function ListasAutorizadas() {
     const { data, error } = await supabase.rpc("fn_cargar_lista", payload);
     setGuardando(false);
     if (error) { setErrorGuardado(error.message); return; }
-    setResultado({ listaId: data, insertadas: filasListas.length });
+    const fila = Array.isArray(data) ? data[0] : data;
+
+    const conflictos = (fila?.conflictos || []).map(c => ({
+      motivo: `Ya existe en catálogo con datos químicos distintos — ${c.detalle}`,
+      nombre_comercial: c.nombre_comercial,
+      plaga_comun: c.plaga_comun,
+    }));
+    if (conflictos.length > 0) {
+      setFilasOmitidas(prev => [...prev, ...conflictos]);
+    }
+
+    setResultado({
+      listaId: fila?.lista_id,
+      insertadas: fila?.insertadas ?? 0,
+      productosCreados: fila?.productos_creados ?? 0,
+      conflictos: conflictos.length,
+    });
     setPaso(6);
   }
 
@@ -300,7 +327,7 @@ export default function ListasAutorizadas() {
       <div style={S.page}>
         <div style={S.container}>
           <div style={S.eyebrow}>JR AGROCONTROL · LISTAS AUTORIZADAS</div>
-          <div style={S.version}>v0.7.1</div>
+          <div style={S.version}>v0.7.4</div>
           <h1 style={S.title}>Acceso restringido</h1>
           <div style={S.avisoRestriccion}>
             Esta pantalla es exclusiva para el administrador. Tu cuenta tiene rol de {usuarioActual.rol}.
@@ -325,7 +352,7 @@ export default function ListasAutorizadas() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📋</div>
-            <div style={S.version}>v0.7.1</div>
+            <div style={S.version}>v0.7.4</div>
           </div>
         </div>
 
@@ -462,9 +489,10 @@ export default function ListasAutorizadas() {
 
                 {modo === "nueva" && filasListas.length === 0 && (
                   <div style={{ ...S.avisoRestriccion, marginBottom: "12px" }}>
-                    Ningún producto de este archivo coincide todavía con tu catálogo — normal en una lista completamente nueva.
-                    Puedes crear la lista vacía ahora, crear los productos en el catálogo usando el reporte de abajo, y volver
-                    después con "Agregar a lista existente" para subir el resto.
+                    Ninguna fila de este archivo pudo procesarse — revisa que ninguna tenga el nombre comercial
+                    vacío y que los intervalos de seguridad/reentrada estén en un formato reconocido ("3 días",
+                    "72 horas", o solo el número). Puedes crear la lista vacía ahora y agregar las filas corregidas
+                    después con "Agregar a lista existente".
                   </div>
                 )}
                 <button
@@ -486,12 +514,20 @@ export default function ListasAutorizadas() {
             {paso === 6 && resultado && (
               <div style={S.seccion}>
                 <div style={{ ...S.avisoRestriccion, color: "#c8e89a", background: "rgba(127,191,90,0.12)", borderColor: "rgba(127,191,90,0.3)" }}>
-                  ✓ Se guardaron {resultado.insertadas} filas correctamente.
+                  {resultado.insertadas > 0 ? (
+                    <>
+                      ✓ Lista {modo === "nueva" ? "creada" : "actualizada"} — se guardaron {resultado.insertadas} fila{resultado.insertadas === 1 ? "" : "s"} de producto{resultado.insertadas === 1 ? "" : "s"}.
+                      {resultado.productosCreados > 0 && <> Se dieron de alta {resultado.productosCreados} producto{resultado.productosCreados === 1 ? "" : "s"} nuevo{resultado.productosCreados === 1 ? "" : "s"} en tu catálogo — completa costo, marca y unidad cuando recibas stock real en Almacén.</>}
+                      {resultado.conflictos > 0 && <> ⚠️ {resultado.conflictos} producto{resultado.conflictos === 1 ? "" : "s"} ya exist{resultado.conflictos === 1 ? "e" : "en"} en tu catálogo pero con datos químicos distintos a los de este Excel — no se tocaron, revisa el reporte para decidir cuál versión es la correcta.</>}
+                    </>
+                  ) : (
+                    <>✓ Lista creada correctamente. Por ahora quedó sin productos — revisa el reporte de filas omitidas.</>
+                  )}
                 </div>
                 {filasOmitidas.length > 0 && (
                   <>
                     <p style={{ fontSize: "13px", color: "rgba(200,230,180,0.7)", marginBottom: "10px" }}>
-                      Quedaron {filasOmitidas.length} filas sin subir. Descarga el reporte, corrígelas o crea los productos faltantes en el catálogo, y vuelve con "Agregar a lista existente".
+                      Quedaron {filasOmitidas.length} filas sin subir — por falta de nombre, intervalo no reconocido, o por coincidir con un producto existente con datos químicos distintos. Descarga el reporte, corrígelas o decide cuál dato es el correcto, y vuelve con "Agregar a lista existente".
                     </p>
                     <button style={S.btnSecundario} onClick={descargarOmitidas}>Descargar Excel de filas omitidas</button>
                   </>
