@@ -1,4 +1,8 @@
-// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.4 ============
+// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.5 ============
+// v0.7.5: nueva sección "Listas activas" visible en el paso 1, arriba de
+// los botones de modo — muestra cada lista activa (especie, comercializadora,
+// revisión, fecha) con su conteo de productos ya cargados. Se refresca sola
+// después de cada guardado exitoso, sin necesitar recargar la página.
 // v0.7.4: protección contra sobrescritura silenciosa de datos químicos.
 // Cuando un producto ya existe en catálogo (por nombre) y el Excel nuevo
 // trae ingrediente_activo, concentracion_ia, grupo_quimico,
@@ -115,6 +119,7 @@ export default function ListasAutorizadas() {
   const [especies, setEspecies] = useState([]);
   const [comercializadoras, setComercializadoras] = useState([]);
   const [listasActivas, setListasActivas] = useState([]);
+  const [productosPorLista, setProductosPorLista] = useState({});
   const [cargandoCatalogos, setCargandoCatalogos] = useState(true);
 
   // Estado del asistente
@@ -156,23 +161,32 @@ export default function ListasAutorizadas() {
   }, [sesion]);
 
   // ---- Catálogos (solo si es admin o superadmin) ----
-  useEffect(() => {
-    if (!usuarioActual || !esAdmin(usuarioActual)) return;
+  function cargarCatalogos() {
     setCargandoCatalogos(true);
 
     Promise.all([
       supabase.from("especies").select("id, nombre").order("nombre"),
       supabase.from("comercializadoras").select("id, nombre").order("nombre"),
       supabase.from("listas").select("id, especie_id, comercializadora_id, numero_revision, fecha_revision, empresa_id").eq("activo", true),
-    ]).then(([esp, com, lst]) => {
+      supabase.from("listas_productos").select("lista_id"),
+    ]).then(([esp, com, lst, lp]) => {
       setCargandoCatalogos(false);
-      const err = esp.error || com.error || lst.error;
+      const err = esp.error || com.error || lst.error || lp.error;
       if (err) { setErrorCarga(err.message); return; }
 
       setEspecies(esp.data || []);
       setComercializadoras(com.data || []);
       setListasActivas(lst.data || []);
+
+      const conteos = {};
+      (lp.data || []).forEach(r => { conteos[r.lista_id] = (conteos[r.lista_id] || 0) + 1; });
+      setProductosPorLista(conteos);
     });
+  }
+
+  useEffect(() => {
+    if (!usuarioActual || !esAdmin(usuarioActual)) return;
+    cargarCatalogos();
   }, [usuarioActual]);
 
   // ---- Validar una fila del Excel (ya no busca en catálogo — eso lo hace fn_cargar_lista) ----
@@ -284,6 +298,7 @@ export default function ListasAutorizadas() {
       conflictos: conflictos.length,
     });
     setPaso(6);
+    cargarCatalogos();
   }
 
   // ---- Descargar Excel de las filas omitidas ----
@@ -327,7 +342,7 @@ export default function ListasAutorizadas() {
       <div style={S.page}>
         <div style={S.container}>
           <div style={S.eyebrow}>JR AGROCONTROL · LISTAS AUTORIZADAS</div>
-          <div style={S.version}>v0.7.4</div>
+          <div style={S.version}>v0.7.5</div>
           <h1 style={S.title}>Acceso restringido</h1>
           <div style={S.avisoRestriccion}>
             Esta pantalla es exclusiva para el administrador. Tu cuenta tiene rol de {usuarioActual.rol}.
@@ -352,7 +367,7 @@ export default function ListasAutorizadas() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📋</div>
-            <div style={S.version}>v0.7.4</div>
+            <div style={S.version}>v0.7.5</div>
           </div>
         </div>
 
@@ -364,17 +379,45 @@ export default function ListasAutorizadas() {
           <>
             {/* ---- Paso 1: elegir modo ---- */}
             {paso === 1 && (
-              <div style={S.seccion}>
-                <div style={S.seccionTitulo}>¿Qué vas a subir?</div>
-                <button style={S.modoBtn} onClick={() => { setModo("nueva"); setPaso(2); }}>
-                  Lista nueva
-                  <div style={S.modoBtnSub}>Crea una revisión nueva (ej. ANEBERRIES 2026, Giddings 2026-2027)</div>
-                </button>
-                <button style={S.modoBtn} onClick={() => { setModo("existente"); setPaso(2); }}>
-                  Agregar a lista existente
-                  <div style={S.modoBtnSub}>Para subir filas que quedaron omitidas la vez pasada</div>
-                </button>
-              </div>
+              <>
+                <div style={S.seccion}>
+                  <div style={S.seccionTitulo}>Listas activas ({listasActivas.length})</div>
+                  {listasActivas.length === 0 ? (
+                    <div style={S.empty}>Aún no hay ninguna lista cargada.</div>
+                  ) : (
+                    listasActivas.map(l => {
+                      const esp = especies.find(e => e.id === l.especie_id)?.nombre || "?";
+                      const com = comercializadoras.find(c => c.id === l.comercializadora_id)?.nombre || "ANEBERRIES base";
+                      const total = productosPorLista[l.id] || 0;
+                      return (
+                        <div key={l.id} style={S.listaCard}>
+                          <div>
+                            <strong>{esp}</strong> · {com}
+                            <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.55)", marginTop: "2px" }}>
+                              rev. {l.numero_revision || "s/n"}{l.fecha_revision ? ` · ${l.fecha_revision}` : ""}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: "13px", fontWeight: "700", color: "#7fbf5a", whiteSpace: "nowrap" }}>
+                            {total} producto{total === 1 ? "" : "s"}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div style={S.seccion}>
+                  <div style={S.seccionTitulo}>¿Qué vas a subir?</div>
+                  <button style={S.modoBtn} onClick={() => { setModo("nueva"); setPaso(2); }}>
+                    Lista nueva
+                    <div style={S.modoBtnSub}>Crea una revisión nueva (ej. ANEBERRIES 2026, Giddings 2026-2027)</div>
+                  </button>
+                  <button style={S.modoBtn} onClick={() => { setModo("existente"); setPaso(2); }}>
+                    Agregar a lista existente
+                    <div style={S.modoBtnSub}>Para subir filas que quedaron omitidas la vez pasada</div>
+                  </button>
+                </div>
+              </>
             )}
 
             {/* ---- Paso 2a: datos de la lista nueva ---- */}
@@ -566,6 +609,7 @@ const S = {
   modoBtn: { width: "100%", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "14px", padding: "20px", fontSize: "15px", fontWeight: "700", color: "#e8f5e0", cursor: "pointer", textAlign: "left", marginBottom: "12px" },
   modoBtnSub: { fontSize: "12px", fontWeight: "400", color: "rgba(200,230,180,0.6)", marginTop: "4px" },
   filaOk: { background: "rgba(127,191,90,0.08)", border: "1px solid rgba(127,191,90,0.2)", borderRadius: "10px", padding: "10px 12px", fontSize: "12px", marginBottom: "6px" },
+  listaCard: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", padding: "10px 12px", fontSize: "12px", marginBottom: "6px", display: "flex", justifyContent: "space-between", alignItems: "center" },
   filaOmitida: { background: "rgba(232,162,61,0.08)", border: "1px solid rgba(232,162,61,0.2)", borderRadius: "10px", padding: "10px 12px", fontSize: "12px", marginBottom: "6px" },
   resumenCard: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "16px", marginBottom: "16px", textAlign: "center" },
   resumenNum: { fontSize: "28px", fontWeight: "800" },
