@@ -1,4 +1,10 @@
-// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.6 ============
+// ============ JR AGROCONTROL — ListasAutorizadas.jsx v0.7.7 ============
+// v0.7.7: el conteo de "productos" por lista se cortaba en silencio a
+// las 1000 filas (límite de Supabase por consulta sin paginar) — con
+// 1004 filas reales entre las 5 listas, la más reciente se quedaba
+// fuera del conteo y mostraba "0 productos" aunque sí tuviera. Se agrega
+// fetchTodasLasFilas() con .range() para traer todas las filas sin corte,
+// mismo patrón que ya usa Almacen.jsx para este problema conocido.
 // v0.7.6: fn_cargar_lista renombró su columna de salida lista_id a
 // out_lista_id (colisionaba con la columna real de listas_productos,
 // causaba "column reference lista_id is ambiguous"). Frontend actualizado
@@ -164,18 +170,34 @@ export default function ListasAutorizadas() {
       });
   }, [sesion]);
 
+  // ---- Paginación: Supabase corta en 1000 filas por consulta si no se pagina ----
+  async function fetchTodasLasFilas(tabla, columnas) {
+    let todas = [];
+    let desde = 0;
+    const tamano = 1000;
+    while (true) {
+      const { data, error } = await supabase.from(tabla).select(columnas).range(desde, desde + tamano - 1);
+      if (error) throw error;
+      todas = todas.concat(data || []);
+      if (!data || data.length < tamano) break;
+      desde += tamano;
+    }
+    return todas;
+  }
+
   // ---- Catálogos (solo si es admin o superadmin) ----
-  function cargarCatalogos() {
+  async function cargarCatalogos() {
     setCargandoCatalogos(true);
 
-    Promise.all([
-      supabase.from("especies").select("id, nombre").order("nombre"),
-      supabase.from("comercializadoras").select("id, nombre").order("nombre"),
-      supabase.from("listas").select("id, especie_id, comercializadora_id, numero_revision, fecha_revision, empresa_id").eq("activo", true),
-      supabase.from("listas_productos").select("lista_id"),
-    ]).then(([esp, com, lst, lp]) => {
+    try {
+      const [esp, com, lst, filasProductos] = await Promise.all([
+        supabase.from("especies").select("id, nombre").order("nombre"),
+        supabase.from("comercializadoras").select("id, nombre").order("nombre"),
+        supabase.from("listas").select("id, especie_id, comercializadora_id, numero_revision, fecha_revision, empresa_id").eq("activo", true),
+        fetchTodasLasFilas("listas_productos", "lista_id"),
+      ]);
       setCargandoCatalogos(false);
-      const err = esp.error || com.error || lst.error || lp.error;
+      const err = esp.error || com.error || lst.error;
       if (err) { setErrorCarga(err.message); return; }
 
       setEspecies(esp.data || []);
@@ -183,9 +205,12 @@ export default function ListasAutorizadas() {
       setListasActivas(lst.data || []);
 
       const conteos = {};
-      (lp.data || []).forEach(r => { conteos[r.lista_id] = (conteos[r.lista_id] || 0) + 1; });
+      filasProductos.forEach(r => { conteos[r.lista_id] = (conteos[r.lista_id] || 0) + 1; });
       setProductosPorLista(conteos);
-    });
+    } catch (e) {
+      setCargandoCatalogos(false);
+      setErrorCarga(e.message);
+    }
   }
 
   useEffect(() => {
@@ -346,7 +371,7 @@ export default function ListasAutorizadas() {
       <div style={S.page}>
         <div style={S.container}>
           <div style={S.eyebrow}>JR AGROCONTROL · LISTAS AUTORIZADAS</div>
-          <div style={S.version}>v0.7.6</div>
+          <div style={S.version}>v0.7.7</div>
           <h1 style={S.title}>Acceso restringido</h1>
           <div style={S.avisoRestriccion}>
             Esta pantalla es exclusiva para el administrador. Tu cuenta tiene rol de {usuarioActual.rol}.
@@ -371,7 +396,7 @@ export default function ListasAutorizadas() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📋</div>
-            <div style={S.version}>v0.7.6</div>
+            <div style={S.version}>v0.7.7</div>
           </div>
         </div>
 
