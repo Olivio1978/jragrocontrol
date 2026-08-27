@@ -1,4 +1,13 @@
-// ============ JR AGROCONTROL — Sanidad.jsx v0.8.1 ============
+// ============ JR AGROCONTROL — Sanidad.jsx v0.8.2 ============
+// v0.8.2: CAMBIO DE FONDO en cómo se captura la dosis, siguiendo la
+// bitácora real de campo. Ya no se captura "cantidad total a usar" —
+// ahora se captura litros de agua por tambo + gasto total de agua a
+// nivel de toda la aplicación (de ahí se calcula el número de tambos),
+// y por producto se captura la dosis POR TAMBO — el total sale de
+// multiplicar dosis × tambos, sin que el usuario tenga que calcularlo
+// a mano. Columnas renombradas: cantidad_recomendada/cantidad_aplicada
+// → dosis_por_tambo_recomendada/dosis_por_tambo_aplicada. El costo
+// congelado ahora es costo_unitario × dosis_por_tambo × tambos.
 // v0.8.1: se muestra el ingrediente_activo junto al nombre comercial en
 // los resultados de búsqueda, las líneas agregadas, y la pantalla de
 // confirmar — ayuda a identificar qué se está aplicando de verdad,
@@ -116,6 +125,8 @@ export default function Sanidad() {
   const [nuevaFecha, setNuevaFecha] = useState(() => new Date().toISOString().slice(0, 10));
   const [nuevaOrigen, setNuevaOrigen] = useState("reactivo");
   const [nuevaNotas, setNuevaNotas] = useState("");
+  const [aguaPorTambo, setAguaPorTambo] = useState("");
+  const [gastoTotalAgua, setGastoTotalAgua] = useState("");
   const [repetir, setRepetir] = useState({ activo: false, cadaDias: 7, veces: 4 });
   const [lineas, setLineas] = useState([]);
   const [modoAgregar, setModoAgregar] = useState(null); // null | 'control' | 'nutriente'
@@ -130,6 +141,8 @@ export default function Sanidad() {
   const [detalleConfirmando, setDetalleConfirmando] = useState([]); // líneas con datos ya resueltos
   const [motivoModificacion, setMotivoModificacion] = useState("");
   const [motivoOtroTexto, setMotivoOtroTexto] = useState("");
+  const [aguaPorTamboConfirmar, setAguaPorTamboConfirmar] = useState("");
+  const [gastoTotalAguaConfirmar, setGastoTotalAguaConfirmar] = useState("");
   const [errorConfirmar, setErrorConfirmar] = useState("");
   const [guardandoConfirmar, setGuardandoConfirmar] = useState(false);
 
@@ -224,7 +237,7 @@ export default function Sanidad() {
     try {
       const { data, error } = await supabase
         .from("sanidad_aplicaciones")
-        .select("id, sector_id, fecha_recomendada, origen, estado, recomendada_por, aplicada_por, motivo_modificacion, notas")
+        .select("id, sector_id, fecha_recomendada, origen, estado, recomendada_por, aplicada_por, motivo_modificacion, notas, agua_por_tambo, gasto_total_agua")
         .eq("rancho_id", ranchoId)
         .order("fecha_recomendada", { ascending: false });
       if (error) throw error;
@@ -340,6 +353,8 @@ export default function Sanidad() {
     setNuevaFecha(new Date().toISOString().slice(0, 10));
     setNuevaOrigen("reactivo");
     setNuevaNotas("");
+    setAguaPorTambo("");
+    setGastoTotalAgua("");
     setRepetir({ activo: false, cadaDias: 7, veces: 4 });
     setLineas([]);
     setModoAgregar(null);
@@ -382,6 +397,8 @@ export default function Sanidad() {
             estado: "pendiente",
             recomendada_por: sesion.user.id,
             notas: nuevaNotas || null,
+            agua_por_tambo: aguaPorTambo !== "" ? Number(aguaPorTambo) : null,
+            gasto_total_agua: gastoTotalAgua !== "" ? Number(gastoTotalAgua) : null,
           })
           .select("id")
           .single();
@@ -391,7 +408,7 @@ export default function Sanidad() {
           sanidad_aplicacion_id: cab.id,
           listas_productos_id: l.listaProductoId,
           producto_id: l.productoId,
-          cantidad_recomendada: l.cantidadRecomendada !== "" ? Number(l.cantidadRecomendada) : null,
+          dosis_por_tambo_recomendada: l.cantidadRecomendada !== "" ? Number(l.cantidadRecomendada) : null,
         }));
         const { error: errDet } = await supabase.from("sanidad_aplicacion_detalle").insert(filasDetalle);
         if (errDet) throw errDet;
@@ -406,6 +423,13 @@ export default function Sanidad() {
     setGuardandoNueva(false);
   }
 
+  // ---- Número de tambos = gasto total de agua ÷ agua por tambo ----
+  function calcularTambos(agua, gasto) {
+    const a = Number(agua), g = Number(gasto);
+    if (!a || !g) return 0;
+    return g / a;
+  }
+
   const cerrarSesion = async () => { await supabase.auth.signOut(); };
 
   // ---- Abrir una aplicación pendiente para confirmarla ----
@@ -413,10 +437,12 @@ export default function Sanidad() {
     setErrorConfirmar("");
     setMotivoModificacion("");
     setMotivoOtroTexto("");
+    setAguaPorTamboConfirmar(aplicacion.agua_por_tambo ?? "");
+    setGastoTotalAguaConfirmar(aplicacion.gasto_total_agua ?? "");
     try {
       const { data, error } = await supabase
         .from("sanidad_aplicacion_detalle")
-        .select("id, listas_productos_id, producto_id, cantidad_recomendada, cantidad_aplicada")
+        .select("id, listas_productos_id, producto_id, dosis_por_tambo_recomendada, dosis_por_tambo_aplicada")
         .eq("sanidad_aplicacion_id", aplicacion.id);
       if (error) throw error;
 
@@ -435,8 +461,8 @@ export default function Sanidad() {
           dosisEtiqueta: lp?.dosis_etiqueta || null,
           intervaloSeguridad: lp?.intervalo_seguridad_horas ?? null,
           intervaloReentrada: lp?.intervalo_reentrada ?? null,
-          cantidadRecomendada: d.cantidad_recomendada,
-          cantidadAplicada: d.cantidad_aplicada ?? d.cantidad_recomendada ?? "",
+          cantidadRecomendada: d.dosis_por_tambo_recomendada,
+          cantidadAplicada: d.dosis_por_tambo_aplicada ?? d.dosis_por_tambo_recomendada ?? "",
         };
       });
 
@@ -452,9 +478,10 @@ export default function Sanidad() {
     setDetalleConfirmando(prev => prev.map((l, i) => i === indice ? { ...l, cantidadAplicada: valor } : l));
   }
 
-  const huboModificacion = detalleConfirmando.some(l =>
-    Number(l.cantidadAplicada) !== Number(l.cantidadRecomendada)
-  );
+  const huboModificacion =
+    detalleConfirmando.some(l => Number(l.cantidadAplicada) !== Number(l.cantidadRecomendada)) ||
+    Number(aguaPorTamboConfirmar) !== Number(aplicacionConfirmando?.agua_por_tambo) ||
+    Number(gastoTotalAguaConfirmar) !== Number(aplicacionConfirmando?.gasto_total_agua);
 
   async function confirmarAplicacion() {
     if (huboModificacion && !motivoModificacion) {
@@ -465,18 +492,21 @@ export default function Sanidad() {
     setErrorConfirmar("");
 
     try {
+      const tambos = calcularTambos(aguaPorTamboConfirmar, gastoTotalAguaConfirmar);
+
       for (const l of detalleConfirmando) {
         const prod = productosInsumos.find(p => p.id === l.productoId);
-        // Costo: se toma el costo_unitario vigente del producto al momento de confirmar
+        // Costo: costo_unitario vigente × dosis por tambo × número de tambos
         const costoUnitario = prod?.costo_unitario ?? 0;
-        const cantidad = l.cantidadAplicada !== "" ? Number(l.cantidadAplicada) : 0;
+        const dosisPorTambo = l.cantidadAplicada !== "" ? Number(l.cantidadAplicada) : 0;
+        const cantidadTotal = dosisPorTambo * tambos;
 
         const { error } = await supabase
           .from("sanidad_aplicacion_detalle")
           .update({
-            cantidad_aplicada: cantidad,
+            dosis_por_tambo_aplicada: dosisPorTambo,
             costo_unitario_congelado: costoUnitario,
-            costo_total: costoUnitario * cantidad,
+            costo_total: costoUnitario * cantidadTotal,
             intervalo_seguridad_congelado: l.intervaloSeguridad,
             intervalo_reentrada_congelado: l.intervaloReentrada,
           })
@@ -492,12 +522,16 @@ export default function Sanidad() {
           fecha_aplicada: new Date().toISOString(),
           motivo_modificacion: huboModificacion ? motivoModificacion : null,
           motivo_otro_texto: huboModificacion && motivoModificacion === "otro" ? motivoOtroTexto : null,
+          agua_por_tambo: aguaPorTamboConfirmar !== "" ? Number(aguaPorTamboConfirmar) : null,
+          gasto_total_agua: gastoTotalAguaConfirmar !== "" ? Number(gastoTotalAguaConfirmar) : null,
         })
         .eq("id", aplicacionConfirmando.id);
       if (errCab) throw errCab;
 
       setAplicacionConfirmando(null);
       setDetalleConfirmando([]);
+      setAguaPorTamboConfirmar("");
+      setGastoTotalAguaConfirmar("");
       setVista("lista");
       cargarAplicaciones();
     } catch (e) {
@@ -536,7 +570,7 @@ export default function Sanidad() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>🧪</div>
-            <div style={S.version}>v0.8.1</div>
+            <div style={S.version}>v0.8.2</div>
           </div>
         </div>
 
@@ -633,6 +667,22 @@ export default function Sanidad() {
               </div>
             </div>
 
+            <div style={S.formGrid2}>
+              <div style={{ flex: 1 }}>
+                <label style={S.label}>Agua por tambo (L)</label>
+                <input type="number" step="0.01" min="0" value={aguaPorTambo} onChange={(e) => setAguaPorTambo(e.target.value)} style={S.select} placeholder="200" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={S.label}>Gasto total de agua (L)</label>
+                <input type="number" step="0.01" min="0" value={gastoTotalAgua} onChange={(e) => setGastoTotalAgua(e.target.value)} style={S.select} placeholder="1000" />
+              </div>
+            </div>
+            {aguaPorTambo && gastoTotalAgua && (
+              <div style={{ fontSize: "12px", color: "rgba(200,230,180,0.6)", marginTop: "-6px", marginBottom: "12px" }}>
+                = {calcularTambos(aguaPorTambo, gastoTotalAgua).toFixed(2)} tambo(s) para todo el sector
+              </div>
+            )}
+
             {nuevaOrigen === "programado" && (
               <div style={S.tarjeta}>
                 <label style={{ ...S.label, display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
@@ -671,13 +721,18 @@ export default function Sanidad() {
                 <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "8px" }}>
                   <input
                     type="number" step="0.01" min="0"
-                    placeholder="Cantidad real a usar"
+                    placeholder="Dosis por tambo"
                     value={l.cantidadRecomendada}
                     onChange={(e) => actualizarCantidadLinea(i, e.target.value)}
                     style={{ ...S.select, flex: 1 }}
                   />
-                  {l.unidadBase && <span style={{ fontSize: "12px", color: "rgba(200,230,180,0.6)" }}>{l.unidadBase}</span>}
+                  {l.unidadBase && <span style={{ fontSize: "12px", color: "rgba(200,230,180,0.6)" }}>{l.unidadBase}/tambo</span>}
                 </div>
+                {l.cantidadRecomendada && aguaPorTambo && gastoTotalAgua && (
+                  <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)", marginTop: "4px" }}>
+                    Total para el sector: {(Number(l.cantidadRecomendada) * calcularTambos(aguaPorTambo, gastoTotalAgua)).toFixed(2)} {l.unidadBase}
+                  </div>
+                )}
               </div>
             ))}
 
@@ -747,8 +802,25 @@ export default function Sanidad() {
               Confirmar — {sectores.find(s => s.id === aplicacionConfirmando?.sector_id)?.nombre} · {aplicacionConfirmando?.fecha_recomendada}
             </div>
 
+            <div style={S.formGrid2}>
+              <div style={{ flex: 1 }}>
+                <label style={S.label}>Agua por tambo (L)</label>
+                <input type="number" step="0.01" min="0" value={aguaPorTamboConfirmar} onChange={(e) => setAguaPorTamboConfirmar(e.target.value)} style={S.select} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={S.label}>Gasto total de agua (L)</label>
+                <input type="number" step="0.01" min="0" value={gastoTotalAguaConfirmar} onChange={(e) => setGastoTotalAguaConfirmar(e.target.value)} style={S.select} />
+              </div>
+            </div>
+            {aguaPorTamboConfirmar && gastoTotalAguaConfirmar && (
+              <div style={{ fontSize: "12px", color: "rgba(200,230,180,0.6)", marginTop: "-6px", marginBottom: "12px" }}>
+                = {calcularTambos(aguaPorTamboConfirmar, gastoTotalAguaConfirmar).toFixed(2)} tambo(s)
+              </div>
+            )}
+
             {detalleConfirmando.map((l, i) => {
               const cambio = l.cantidadAplicada !== "" && Number(l.cantidadAplicada) !== Number(l.cantidadRecomendada);
+              const tambos = calcularTambos(aguaPorTamboConfirmar, gastoTotalAguaConfirmar);
               return (
                 <div key={l.id} style={S.lineaProducto}>
                   <strong>{l.nombreProducto}</strong>
@@ -759,7 +831,7 @@ export default function Sanidad() {
                       : "Nutriente / coadyuvante"}
                   </div>
                   <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)", marginTop: "2px" }}>
-                    Recomendado: {l.cantidadRecomendada ?? "s/d"} {l.unidadBase}
+                    Recomendado: {l.cantidadRecomendada ?? "s/d"} {l.unidadBase}/tambo
                   </div>
                   <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "8px" }}>
                     <input
@@ -768,8 +840,13 @@ export default function Sanidad() {
                       onChange={(e) => actualizarCantidadAplicada(i, e.target.value)}
                       style={{ ...S.select, flex: 1, ...(cambio ? { borderColor: "#e8a23d" } : {}) }}
                     />
-                    {l.unidadBase && <span style={{ fontSize: "12px", color: "rgba(200,230,180,0.6)" }}>{l.unidadBase}</span>}
+                    {l.unidadBase && <span style={{ fontSize: "12px", color: "rgba(200,230,180,0.6)" }}>{l.unidadBase}/tambo</span>}
                   </div>
+                  {l.cantidadAplicada !== "" && tambos > 0 && (
+                    <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)", marginTop: "4px" }}>
+                      Total aplicado: {(Number(l.cantidadAplicada) * tambos).toFixed(2)} {l.unidadBase}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -803,7 +880,7 @@ export default function Sanidad() {
             </button>
             <button
               style={{ ...S.btnSecundario, marginTop: "10px" }}
-              onClick={() => { setAplicacionConfirmando(null); setDetalleConfirmando([]); setVista("lista"); }}
+              onClick={() => { setAplicacionConfirmando(null); setDetalleConfirmando([]); setAguaPorTamboConfirmar(""); setGastoTotalAguaConfirmar(""); setVista("lista"); }}
               disabled={guardandoConfirmar}
             >
               Cancelar
