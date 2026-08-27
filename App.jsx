@@ -1,5 +1,9 @@
-// ============ JR AGROCONTROL — App.jsx v0.3.10 ============
-// v0.3.10: se agrega el módulo "Listas Autorizadas" (Módulo 7): carga de
+// ============ JR AGROCONTROL — App.jsx v0.3.11 ============
+// v0.3.11: se agrega el módulo "Sanidad" (Módulo 8): registro de
+// aplicaciones fitosanitarias en campo (control de plagas ligado a
+// Listas Autorizadas + nutrientes/coadyuvantes acompañantes en el
+// mismo tanque), con el mismo patrón de dos acciones que Fertilización.
+// v0.3.10: se agregó el módulo "Listas Autorizadas" (Módulo 7): carga de
 // listas de productos fitosanitarios permitidos (ANEBERRIES global o
 // comercializadora propia de la empresa), exclusivo para admin/superadmin.
 import { useState } from "react";
@@ -10,6 +14,7 @@ import Configuracion from "./src/Configuracion";
 import Almacen from "./src/Almacen";
 import Fertilizaciones from "./src/Fertilizaciones";
 import ListasAutorizadas from "./src/ListasAutorizadas";
+import Sanidad from "./src/Sanidad";
 
 const MODULOS = [
   { key: "asistencia",      label: "Asistencia",      icono: "👷" },
@@ -19,6 +24,7 @@ const MODULOS = [
   { key: "almacen",         label: "Almacén",         icono: "📦" },
   { key: "fertilizaciones", label: "Fertilización",   icono: "💧" },
   { key: "listas",          label: "Listas Autorizadas", icono: "📋" },
+  { key: "sanidad",         label: "Sanidad",         icono: "🧪" },
 ];
 
 export default function App() {
@@ -62,7 +68,7 @@ export default function App() {
       {modulo === "almacen"         && <Almacen onNavigate={setModulo} />}
       {modulo === "fertilizaciones" && <Fertilizaciones />}
       {modulo === "listas"          && <ListasAutorizadas />}
+      {modulo === "sanidad"         && <Sanidad />}
     </div>
   );
 }
-
