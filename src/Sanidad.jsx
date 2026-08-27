@@ -1,4 +1,8 @@
-// ============ JR AGROCONTROL — Sanidad.jsx v0.8.0 ============
+// ============ JR AGROCONTROL — Sanidad.jsx v0.8.1 ============
+// v0.8.1: se muestra el ingrediente_activo junto al nombre comercial en
+// los resultados de búsqueda, las líneas agregadas, y la pantalla de
+// confirmar — ayuda a identificar qué se está aplicando de verdad,
+// más allá del nombre comercial.
 // Módulo 8. Registro de aplicaciones foliares — control de plagas/enfermedades
 // (ligado a Listas Autorizadas para trazabilidad) y nutrición/coadyuvantes
 // acompañantes en el mismo tanque, cuando aplique.
@@ -164,9 +168,9 @@ export default function Sanidad() {
           supabase.from("listas").select("id, especie_id, comercializadora_id, empresa_id, activo").eq("activo", true),
           fetchTodasLasFilas(
             "listas_productos",
-            "id, lista_id, producto_fitosanitario_id, plaga_comun, plaga_cientifica, dosis_etiqueta, intervalo_seguridad_horas, intervalo_reentrada, lmr_ppm, productos_fitosanitarios(producto_id, grupo_quimico, productos_insumos(nombre_comercial, costo_unitario, unidad_base))"
+            "id, lista_id, producto_fitosanitario_id, plaga_comun, plaga_cientifica, dosis_etiqueta, intervalo_seguridad_horas, intervalo_reentrada, lmr_ppm, productos_fitosanitarios(producto_id, grupo_quimico, productos_insumos(nombre_comercial, ingrediente_activo, costo_unitario, unidad_base))"
           ),
-          fetchTodasLasFilas("productos_insumos", "id, nombre_comercial, categoria, costo_unitario, unidad_base"),
+          fetchTodasLasFilas("productos_insumos", "id, nombre_comercial, categoria, ingrediente_activo, costo_unitario, unidad_base"),
         ]);
         const err = r.error || s.error || cul.error || lst.error;
         if (err) { setErrorCarga(err.message); setCargandoCatalogos(false); return; }
@@ -277,6 +281,7 @@ export default function Sanidad() {
 
   async function agregarLineaControl(entradaLista) {
     const nombreProducto = entradaLista.productos_fitosanitarios?.productos_insumos?.nombre_comercial || "Producto";
+    const ingredienteActivo = entradaLista.productos_fitosanitarios?.productos_insumos?.ingrediente_activo || "";
     const grupoQuimico = entradaLista.productos_fitosanitarios?.grupo_quimico || null;
     const productoId = entradaLista.productos_fitosanitarios?.producto_id;
 
@@ -285,6 +290,7 @@ export default function Sanidad() {
       listaProductoId: entradaLista.id,
       productoId,
       nombreProducto,
+      ingredienteActivo,
       plagaComun: entradaLista.plaga_comun,
       plagaCientifica: entradaLista.plaga_cientifica,
       dosisEtiqueta: entradaLista.dosis_etiqueta,
@@ -312,6 +318,7 @@ export default function Sanidad() {
       listaProductoId: null,
       productoId: producto.id,
       nombreProducto: producto.nombre_comercial,
+      ingredienteActivo: producto.ingrediente_activo || "",
       unidadBase: producto.unidad_base || "",
       costoUnitario: producto.costo_unitario ?? 0,
       cantidadRecomendada: "",
@@ -422,6 +429,7 @@ export default function Sanidad() {
           productoId: d.producto_id,
           tipo: d.listas_productos_id ? "control" : "nutriente",
           nombreProducto: lp?.productos_fitosanitarios?.productos_insumos?.nombre_comercial || prod?.nombre_comercial || "Producto",
+          ingredienteActivo: lp?.productos_fitosanitarios?.productos_insumos?.ingrediente_activo || prod?.ingrediente_activo || "",
           unidadBase: lp?.productos_fitosanitarios?.productos_insumos?.unidad_base || prod?.unidad_base || "",
           plagaComun: lp?.plaga_comun || null,
           dosisEtiqueta: lp?.dosis_etiqueta || null,
@@ -528,7 +536,7 @@ export default function Sanidad() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>🧪</div>
-            <div style={S.version}>v0.8.0</div>
+            <div style={S.version}>v0.8.1</div>
           </div>
         </div>
 
@@ -653,6 +661,7 @@ export default function Sanidad() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div>
                     <strong>{l.nombreProducto}</strong>
+                    {l.ingredienteActivo && <span style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)" }}> · {l.ingredienteActivo}</span>}
                     <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.6)" }}>
                       {l.tipo === "control" ? `Control · ${l.plagaComun} · ref. etiqueta: ${l.dosisEtiqueta || "s/d"}` : "Nutriente / coadyuvante"}
                     </div>
@@ -692,6 +701,9 @@ export default function Sanidad() {
                       buscarControlPorPlaga(nuevaSectorId, textoPlaga).map(r => (
                         <div key={r.id} style={{ ...S.lineaProducto, cursor: "pointer", marginTop: "10px" }} onClick={() => agregarLineaControl(r)}>
                           <strong>{r.productos_fitosanitarios?.productos_insumos?.nombre_comercial || "Producto"}</strong>
+                          {r.productos_fitosanitarios?.productos_insumos?.ingrediente_activo && (
+                            <span style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)" }}> · {r.productos_fitosanitarios.productos_insumos.ingrediente_activo}</span>
+                          )}
                           <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.6)", marginTop: "2px" }}>
                             {r.plaga_comun} · dosis {r.dosis_etiqueta || "s/d"} · seguridad {r.intervalo_seguridad_horas ?? "s/d"}h · reentrada {r.intervalo_reentrada ?? "s/d"}h
                           </div>
@@ -711,6 +723,7 @@ export default function Sanidad() {
                   .map(p => (
                     <div key={p.id} style={{ ...S.lineaProducto, cursor: "pointer", marginTop: "10px" }} onClick={() => agregarLineaNutriente(p)}>
                       <strong>{p.nombre_comercial}</strong>
+                      {p.ingrediente_activo && <span style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)" }}> · {p.ingrediente_activo}</span>}
                     </div>
                   ))}
               </div>
@@ -739,6 +752,7 @@ export default function Sanidad() {
               return (
                 <div key={l.id} style={S.lineaProducto}>
                   <strong>{l.nombreProducto}</strong>
+                  {l.ingredienteActivo && <span style={{ fontSize: "11px", color: "rgba(200,230,180,0.5)" }}> · {l.ingredienteActivo}</span>}
                   <div style={{ fontSize: "11px", color: "rgba(200,230,180,0.6)", marginTop: "2px" }}>
                     {l.tipo === "control"
                       ? `Control · ${l.plagaComun} · seguridad ${l.intervaloSeguridad ?? "s/d"}h · reentrada ${l.intervaloReentrada ?? "s/d"}h`
