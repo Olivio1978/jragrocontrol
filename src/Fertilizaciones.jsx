@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.31 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.32 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -39,7 +39,9 @@ const DIAS = [[1, "L"], [2, "M"], [3, "Mi"], [4, "J"], [5, "V"], [6, "S"], [7, "
 
 const EVENTOS_CICLO = [
   ["plantacion", "Plantación"], ["poda_piso", "Poda a piso"],
-  ["poda_recuadre", "Poda recuadre"], ["pinchado", "Pinchado"], ["otro", "Otro"],
+  ["poda_recuadre", "Poda recuadre"], ["pinchado", "Pinchado"],
+  ["diferenciacion", "Diferenciación"], ["floracion", "Floración"],
+  ["fructificacion", "Fructificación"], ["otro", "Otro"],
 ];
 
 const ROLES_TXT = {
@@ -920,7 +922,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.31</div>
+            <div style={S.version}>v0.3.32</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
