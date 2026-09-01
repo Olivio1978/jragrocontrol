@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.29 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.30 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -193,6 +193,8 @@ export default function Fertilizaciones() {
   const [repFertDet, setRepFertDet] = useState([]);
   const [repMediciones, setRepMediciones] = useState([]);
   const [cargandoReporte, setCargandoReporte] = useState(false);
+  const [bodegas, setBodegas] = useState([]);
+  const [existencias, setExistencias] = useState([]);
 
 
   // ---- Programación de recetas ----
@@ -232,7 +234,7 @@ export default function Fertilizaciones() {
   // ---- 3. Datos del módulo ----
   const cargarDatos = useCallback(async () => {
     setCargando(true);
-    const [r, p, rec, rd, f, fd, m, es, rp] = await Promise.all([
+    const [r, p, rec, rd, f, fd, m, es, rp, b, ex] = await Promise.all([
       supabase.from("ranchos").select("id, nombre, empresa_id").order("nombre"),
       supabase.from("productos_insumos").select("id, nombre_comercial, unidad_base, costo_unitario, via_fertirriego, via_foliar, via_suelo").eq("activo", true).order("nombre_comercial"),
       supabase.from("recetas").select("*").order("nombre"),
@@ -242,6 +244,8 @@ export default function Fertilizaciones() {
       supabase.from("mediciones_campo").select("*").order("fecha", { ascending: false }).limit(30),
       supabase.from("vw_estado_sectores").select("*"),
       supabase.from("receta_programacion").select("*"),
+      supabase.from("bodegas").select("id, nombre, rancho_id").eq("activo", true),
+      supabase.from("inventario_existencias").select("*"),
     ]);
     setRanchos(r.data || []);
     if (r.data?.length) setEmpresaId(r.data[0].empresa_id);
@@ -253,6 +257,8 @@ export default function Fertilizaciones() {
     setMediciones(m.data || []);
     setEstadoSectores(es.data || []);
     setProgramaciones(rp.data || []);
+    setBodegas(b.data || []);
+    setExistencias(ex.data || []);
     setCargando(false);
   }, []);
 
@@ -382,6 +388,37 @@ export default function Fertilizaciones() {
   })();
   const costoTotalGeneral = costosPorSector.reduce((s, c) => s + c.total, 0);
 
+  // ---- Necesidades de compra: recomendaciones PENDIENTES del rango,
+  // agrupadas por rancho + producto, comparadas contra la existencia
+  // actual en la bodega de ese rancho. Piensa en "programé toda la
+  // semana, ¿qué me falta comprar para que no le falte a los aplicadores?"
+  const necesidadesCompra = (() => {
+    const pendientesReporte = repFert.filter(f => f.estado === "pendiente");
+    const mapa = {};
+    pendientesReporte.forEach(f => {
+      (detPorFertReporte[f.id] || []).forEach(d => {
+        const key = `${f.rancho_id}|${d.producto_id}`;
+        if (!mapa[key]) mapa[key] = { rancho_id: f.rancho_id, producto_id: d.producto_id, necesario: 0 };
+        mapa[key].necesario += Number(d.cantidad_recomendada);
+      });
+    });
+    return Object.values(mapa)
+      .map(v => {
+        const bodega = bodegas.find(b => b.rancho_id === v.rancho_id);
+        const fila = bodega ? existencias.find(e => e.bodega_id === bodega.id && e.producto_id === v.producto_id) : null;
+        const existencia = fila ? Number(fila.existencia) : 0;
+        return {
+          ...v,
+          nombreRancho: nombreRancho(v.rancho_id),
+          nombreProd: nombreProducto(v.producto_id),
+          unidad: unidadProducto(v.producto_id),
+          existencia,
+          faltante: Math.max(0, v.necesario - existencia),
+        };
+      })
+      .sort((a, b) => a.nombreRancho.localeCompare(b.nombreRancho) || b.faltante - a.faltante);
+  })();
+
   // ---- Curva nutricional: kg de cada elemento por hectárea, por sector y semana fenológica ----
   // ---- Curva nutricional y de suelo (kg/ha + CE/pH/humedad), unificadas
   // por sector y semana fenológica: así se ve de un vistazo qué se aplicó
@@ -485,6 +522,20 @@ export default function Fertilizaciones() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = `costos_fertilizacion_${repDesde}_a_${repHasta}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarNecesidadesCSV() {
+    const encabezado = ["Rancho", "Producto", "Necesario", "Existencia", "Faltante por comprar", "Unidad", "Del", "Al"];
+    const filas = necesidadesCompra.map(n => [
+      n.nombreRancho, n.nombreProd, n.necesario.toFixed(2), n.existencia.toFixed(2),
+      n.faltante.toFixed(2), n.unidad, repDesde, repHasta,
+    ]);
+    const csv = [encabezado, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `necesidades_compra_${repDesde}_a_${repHasta}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -869,7 +920,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.29</div>
+            <div style={S.version}>v0.3.30</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1616,6 +1667,48 @@ export default function Fertilizaciones() {
               )}
               {cargandoReporte && (
                 <div style={{ fontSize: 12, color: "rgba(200,230,180,0.5)", marginTop: 8 }}>Calculando…</div>
+              )}
+            </div>
+
+            {/* --- Necesidades de compra --- */}
+            <div style={S.card}>
+              <div style={S.seccionTitulo}>🛒 Necesidades de compra</div>
+              <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginTop: -8, marginBottom: 10 }}>
+                Suma todas las recomendaciones pendientes del rango (sin importar cuántos días distintos) y las compara contra lo que hay hoy en cada bodega.
+              </div>
+              {necesidadesCompra.length === 0 ? (
+                <div style={S.empty}>No hay recomendaciones pendientes en este periodo.</div>
+              ) : (
+                <>
+                  {[...new Set(necesidadesCompra.map(n => n.rancho_id))].map(ranchoId => {
+                    const items = necesidadesCompra.filter(n => n.rancho_id === ranchoId);
+                    const nombreR = items[0]?.nombreRancho;
+                    return (
+                      <div key={ranchoId} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#ffffff", marginBottom: 4 }}>{nombreR}</div>
+                        {items.map(n => (
+                          <div key={n.producto_id} style={{ padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                              <span style={{ color: "#e8f5e0" }}>{n.nombreProd}</span>
+                              {n.faltante > 0 ? (
+                                <span style={{ fontWeight: 800, color: "#e8a23d" }}>🛒 Faltan {n.faltante.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {n.unidad}</span>
+                              ) : (
+                                <span style={{ fontWeight: 700, color: "#7fbf5a" }}>✅ Cubierto</span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)" }}>
+                              Necesario: {n.necesario.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {n.unidad}
+                              {" · "}Hay en bodega: {n.existencia.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {n.unidad}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  <button style={{ ...S.btnSecundario, marginTop: 4 }} onClick={exportarNecesidadesCSV}>
+                    ⬇️ Exportar a Excel (CSV)
+                  </button>
+                </>
               )}
             </div>
 
