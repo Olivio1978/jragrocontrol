@@ -1,6 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.27 ============
-// v0.3.27: la variable local esAdmin ahora también reconoce el rol
-// superadmin (dueño de la plataforma), no solo "admin".
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.29 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -47,7 +45,6 @@ const EVENTOS_CICLO = [
 const ROLES_TXT = {
   admin: "Administrador", encargado: "Encargado",
   agronomo: "Agrónomo", agronomo_externo: "Agrónomo externo",
-  superadmin: "Super Admin",
 };
 
 const compatible = (p, via) =>
@@ -161,6 +158,7 @@ export default function Fertilizaciones() {
   const [pestana, setPestana]           = useState("aplicaciones");
   const [filtroEstado, setFiltroEstado] = useState("pendiente");
   const [filtroFecha, setFiltroFecha] = useState("");
+  const [filtroSector, setFiltroSector] = useState("");
 
   // ---- Nueva recomendación ----
   const [creando, setCreando] = useState(false);
@@ -262,7 +260,7 @@ export default function Fertilizaciones() {
 
   function avisar(texto) { setAviso(texto); setTimeout(() => setAviso(null), 6000); }
 
-  const esAdmin        = usuarioActual?.rol === "admin" || usuarioActual?.rol === "superadmin";
+  const esAdmin        = usuarioActual?.rol === "admin";
   const esAgronomo     = usuarioActual?.rol === "agronomo";
   const esEncargado    = usuarioActual?.rol === "encargado";
   const puedeRecomendar = esAdmin || esAgronomo;
@@ -534,6 +532,20 @@ export default function Fertilizaciones() {
     const ref = new Date(info.fecha_referencia + "T00:00:00");
     const diffDias = Math.floor((fecha - ref) / 86400000);
     return Math.floor(diffDias / 7) + 1;
+  }
+
+  // Inversa: la fecha en que inicia una semana fenológica dada (lunes-a-domingo
+  // del ciclo, no del calendario). Ayuda a programar sin dejar huecos.
+  function fechaInicioSemana(sectorId, semana) {
+    const info = sectorInfo(sectorId);
+    const n = Number(semana);
+    if (!info || !info.fecha_referencia || !n || n < 1) return null;
+    const ref = new Date(info.fecha_referencia + "T00:00:00");
+    ref.setDate(ref.getDate() + (n - 1) * 7);
+    return ref;
+  }
+  function formatoCorto(d) {
+    return d ? d.toLocaleDateString("es-MX", { day: "2-digit", month: "short" }) : "";
   }
 
   // Dentro de un rango [desde, hasta], las fechas que caen en algún día y
@@ -829,6 +841,7 @@ export default function Fertilizaciones() {
     .filter(f => !esEncargado || f.rancho_id === usuarioActual.rancho_id)
     .filter(f => filtroEstado === "todas" || f.estado === filtroEstado)
     .filter(f => !filtroFecha || f.fecha_recomendada === filtroFecha)
+    .filter(f => !filtroSector || f.sector_id === filtroSector)
     .slice()
     .sort((a, b) => filtroEstado === "pendiente"
       ? new Date(a.fecha_recomendada) - new Date(b.fecha_recomendada)   // más antigua (más urgente) primero
@@ -856,7 +869,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.27</div>
+            <div style={S.version}>v0.3.29</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1054,6 +1067,15 @@ export default function Fertilizaciones() {
                 <button onClick={() => setFiltroFecha("")} style={{ ...S.btnCerrarError, fontSize: 11, color: "#e05c5c" }}>
                   ✕ Quitar filtro de fecha
                 </button>
+              )}
+              {estadoSectores.filter(s => !esEncargado || s.rancho_id === usuarioActual.rancho_id).length > 1 && (
+                <select value={filtroSector} onChange={e => setFiltroSector(e.target.value)}
+                  style={{ ...S.select, width: "auto", padding: "6px 10px", fontSize: 11 }}>
+                  <option value="">Todos los sectores</option>
+                  {estadoSectores
+                    .filter(s => !esEncargado || s.rancho_id === usuarioActual.rancho_id)
+                    .map(s => <option key={s.sector_id} value={s.sector_id}>{s.rancho} · {s.sector}</option>)}
+                </select>
               )}
             </div>
 
@@ -1265,6 +1287,7 @@ export default function Fertilizaciones() {
                   <div style={{ fontSize: 11, color: "rgba(200,230,180,0.45)", marginBottom: 6 }}>
                     {r.cultivo}{r.etapa_fenologica ? ` · ${r.etapa_fenologica}` : ""}
                     {!r.activo && " · INACTIVA"}
+                    {r.creado_en && ` · Creada: ${new Date(r.creado_en).toLocaleDateString("es-MX")}`}
                   </div>
                   {det.map(d => (
                     <div key={d.id} style={S.cardRow}>
@@ -1320,6 +1343,45 @@ export default function Fertilizaciones() {
                             onChange={e => setProgForm({ ...progForm, hasta: e.target.value })} />
                         </div>
                       </div>
+
+                      {progForm.sector_id && (progForm.desde || progForm.hasta) && (
+                        <div style={{ fontSize: 11, color: "#7fbf5a", marginTop: -8, marginBottom: 12 }}>
+                          {progForm.desde && `Semana ${progForm.desde} inicia el ${formatoCorto(fechaInicioSemana(progForm.sector_id, progForm.desde))}`}
+                          {progForm.hasta && (() => {
+                            const fin = fechaInicioSemana(progForm.sector_id, progForm.hasta);
+                            if (!fin) return null;
+                            const finReal = new Date(fin); finReal.setDate(finReal.getDate() + 6);
+                            return ` · semana ${progForm.hasta} termina el ${formatoCorto(finReal)}`;
+                          })()}
+                        </div>
+                      )}
+
+                      {progForm.sector_id && (() => {
+                        const yaProgramado = programaciones
+                          .filter(pr => pr.activo && pr.sector_id === progForm.sector_id)
+                          .map(pr => ({ ...pr, recetaNombre: recetas.find(x => x.id === pr.receta_id)?.nombre || "Receta" }))
+                          .sort((a, b) => a.semana_desde - b.semana_desde);
+                        if (!yaProgramado.length) return (
+                          <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginBottom: 10 }}>
+                            Este sector no tiene ninguna receta programada todavía — puedes empezar en la semana 1.
+                          </div>
+                        );
+                        const proximaLibre = Math.max(...yaProgramado.map(p => p.semana_hasta)) + 1;
+                        return (
+                          <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: 8, marginBottom: 10 }}>
+                            <div style={{ fontSize: 11, color: "rgba(200,230,180,0.55)", marginBottom: 4 }}>Ya programado en este sector:</div>
+                            {yaProgramado.map(pr => (
+                              <div key={pr.id} style={{ fontSize: 11, color: "rgba(200,230,180,0.75)" }}>
+                                Sem. {pr.semana_desde}–{pr.semana_hasta} · {pr.recetaNombre}
+                              </div>
+                            ))}
+                            <div style={{ fontSize: 11, color: "#e8a23d", marginTop: 4, fontWeight: 600 }}>
+                              Próxima semana libre: {proximaLibre}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       <label style={S.label}>DÍAS DE APLICACIÓN</label>
                       <div style={{ display: "flex", gap: 4 }}>
                         {DIAS.map(([n, t]) => (
@@ -1389,6 +1451,9 @@ export default function Fertilizaciones() {
                       </div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#7fbf5a", marginTop: 6 }}>
                         Semana fenológica {s.semana_fenologica} · Semana calendario {s.semana_calendario}
+                      </div>
+                      <div style={{ fontSize: 11, color: "rgba(200,230,180,0.45)", marginTop: 2 }}>
+                        Esta semana fenológica inició el {formatoCorto(fechaInicioSemana(s.sector_id, s.semana_fenologica))}
                       </div>
                     </>
                   ) : (
@@ -1712,4 +1777,3 @@ export default function Fertilizaciones() {
     </div>
   );
 }
-
