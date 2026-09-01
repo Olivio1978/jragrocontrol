@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.32 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.34 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -171,6 +171,15 @@ export default function Fertilizaciones() {
 
   // ---- Confirmación en campo ----
   const [confirmando, setConfirmando] = useState(null);
+  const [editando, setEditando] = useState(null);        // id de la fertilización en edición
+  const [lineasEdit, setLineasEdit] = useState([]);       // [{ id?, producto_id, cantidad }]
+
+  // ---- Feedback de guardado (todos los botones "Guardar" del módulo) ----
+  const [guardando, setGuardando] = useState(false);
+  async function conGuardando(fn) {
+    setGuardando(true);
+    try { await fn(); } finally { setGuardando(false); }
+  }
   const [aplicadas, setAplicadas]     = useState({});
   const [motivo, setMotivo]           = useState("");
   const [motivoTexto, setMotivoTexto] = useState("");
@@ -279,6 +288,16 @@ export default function Fertilizaciones() {
   const sectorInfo = id => estadoSectores.find(s => s.sector_id === id);
   // Día ISO de una fecha (1=lunes ... 7=domingo)
   const diaISO = fecha => { const d = new Date(fecha + "T00:00:00").getDay(); return d === 0 ? 7 : d; };
+
+  // Existencia actual de un producto en la bodega del rancho indicado
+  // (usa los datos de bodegas/existencias cargados para el reporte de
+  // Necesidades de compra; sirve también aquí como aviso al editar).
+  function existenciaDe(productoId, ranchoId) {
+    const bodega = bodegas.find(b => b.rancho_id === ranchoId);
+    if (!bodega) return null;
+    const fila = existencias.find(e => e.bodega_id === bodega.id && e.producto_id === productoId);
+    return fila ? Number(fila.existencia) : 0;
+  }
 
   // ================= REPORTES =================
   const cargarReporte = useCallback(async () => {
@@ -751,6 +770,58 @@ export default function Fertilizaciones() {
     cargarDatos();
   }
 
+  // ================= EDITAR RECOMENDACIÓN PENDIENTE =================
+  // Alcance acordado: solo productos y cantidades. Fecha, sector y vía
+  // no se tocan aquí — para eso se cancela y se crea una nueva.
+  function abrirEdicion(f) {
+    const det = aplicacionDet.filter(d => d.fertilizacion_id === f.id);
+    setLineasEdit(det.map(d => ({ id: d.id, producto_id: d.producto_id, cantidad: String(d.cantidad_recomendada) })));
+    setEditando(f.id);
+  }
+
+  function cambiarLineaEdit(i, campo, valor) {
+    const nuevas = [...lineasEdit];
+    nuevas[i] = { ...nuevas[i], [campo]: valor };
+    setLineasEdit(nuevas);
+  }
+
+  function quitarLineaEdit(i) {
+    setLineasEdit(lineasEdit.filter((_, idx) => idx !== i));
+  }
+
+  async function guardarEdicion(f) {
+    const validas = lineasEdit.filter(l => l.producto_id && Number(l.cantidad) > 0);
+    if (!validas.length) return setError("La recomendación necesita al menos un producto con cantidad.");
+
+    const originales = aplicacionDet.filter(d => d.fertilizacion_id === f.id);
+
+    // Actualizar/insertar las líneas presentes
+    for (const l of validas) {
+      if (l.id) {
+        const { error: e } = await supabase.from("fertilizacion_detalle")
+          .update({ cantidad_recomendada: Number(l.cantidad) }).eq("id", l.id);
+        if (e) return setError(`${nombreProducto(l.producto_id)}: ${e.message}`);
+      } else {
+        const { error: e } = await supabase.from("fertilizacion_detalle").insert({
+          fertilizacion_id: f.id, producto_id: l.producto_id, cantidad_recomendada: Number(l.cantidad),
+        });
+        if (e) return setError(`${nombreProducto(l.producto_id)}: ${e.message}`);
+      }
+    }
+
+    // Borrar las líneas que quitaron durante la edición
+    const idsConservados = new Set(validas.filter(l => l.id).map(l => l.id));
+    const aBorrar = originales.filter(d => !idsConservados.has(d.id));
+    for (const d of aBorrar) {
+      const { error: e } = await supabase.from("fertilizacion_detalle").delete().eq("id", d.id);
+      if (e) return setError(e.message);
+    }
+
+    avisar("Recomendación actualizada.");
+    setEditando(null);
+    cargarDatos();
+  }
+
   // ================= RECETAS =================
   async function guardarReceta() {
     if (!nuevaReceta.nombre || !nuevaReceta.cultivo)
@@ -922,7 +993,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.32</div>
+            <div style={S.version}>v0.3.34</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1082,8 +1153,9 @@ export default function Fertilizaciones() {
                 </div>
 
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={guardarRecomendacion}>
-                    {generarRango ? "Generar recomendaciones" : "Guardar recomendación"}
+                  <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, opacity: guardando ? 0.6 : 1 }}
+                    disabled={guardando} onClick={() => conGuardando(guardarRecomendacion)}>
+                    {guardando ? "Guardando…" : (generarRango ? "Generar recomendaciones" : "Guardar recomendación")}
                   </button>
                   <button style={S.btnSecundario} onClick={() => { setCreando(false); setGenerarRango(false); setRangoHasta(""); }}>Cancelar</button>
                 </div>
@@ -1136,6 +1208,7 @@ export default function Fertilizaciones() {
               const det = aplicacionDet.filter(d => d.fertilizacion_id === f.id);
               const est = ESTADOS[f.estado];
               const abierta = confirmando === f.id;
+              const editandoEsta = editando === f.id;
               const costoTotal = det.reduce((s, d) =>
                 s + Number(d.cantidad_aplicada ?? 0) * Number(d.costo_unitario ?? 0), 0);
               return (
@@ -1161,29 +1234,70 @@ export default function Fertilizaciones() {
                     </div>
                   )}
 
-                  {det.map(d => (
-                    <div key={d.id} style={S.cardRow}>
-                      <span>{nombreProducto(d.producto_id)}</span>
-                      {abierta ? (
-                        <input style={{ ...S.select, width: 100, padding: "6px 8px" }} type="number" min="0" step="0.001"
-                          value={aplicadas[d.id] ?? ""}
-                          onChange={e => setAplicadas({ ...aplicadas, [d.id]: e.target.value })} />
-                      ) : (
-                        <b style={{ color: "#e8f5e0" }}>
-                          {f.estado === "pendiente"
-                            ? `${Number(d.cantidad_recomendada)} ${unidadProducto(d.producto_id)}`
-                            : `${Number(d.cantidad_aplicada ?? d.cantidad_recomendada)} ${unidadProducto(d.producto_id)}`}
-                          {(f.estado === "modificada" && Number(d.cantidad_aplicada) !== Number(d.cantidad_recomendada)) &&
-                            <span style={{ color: "#5a9bd4" }}> (rec. {Number(d.cantidad_recomendada)})</span>}
-                        </b>
-                      )}
+                  {editandoEsta ? (
+                    <div style={{ marginTop: 4 }}>
+                      {lineasEdit.map((l, i) => {
+                        const stock = l.producto_id ? existenciaDe(l.producto_id, f.rancho_id) : null;
+                        const insuficiente = stock != null && Number(l.cantidad || 0) > stock;
+                        return (
+                          <div key={i} style={{ marginBottom: 8 }}>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <select style={{ ...S.select, flex: 2 }} value={l.producto_id}
+                                onChange={e => cambiarLineaEdit(i, "producto_id", e.target.value)}>
+                                <option value="">— Producto —</option>
+                                {productos.filter(p => compatible(p, f.tipo_aplicacion))
+                                  .map(p => <option key={p.id} value={p.id}>{p.nombre_comercial}</option>)}
+                              </select>
+                              <input style={{ ...S.select, flex: 1 }} type="number" min="0" step="0.001"
+                                value={l.cantidad} onChange={e => cambiarLineaEdit(i, "cantidad", e.target.value)} />
+                              <button style={{ ...S.btnCerrarError, color: "#e05c5c" }} onClick={() => quitarLineaEdit(i)}>✕</button>
+                            </div>
+                            {stock != null && (
+                              <div style={{ fontSize: 11, marginTop: 3, color: insuficiente ? "#e8a23d" : "rgba(200,230,180,0.5)" }}>
+                                {insuficiente ? "⚠️ " : ""}hay {stock.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {unidadProducto(l.producto_id)} en {nombreRancho(f.rancho_id)}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <button style={S.btnSecundario} onClick={() => setLineasEdit([...lineasEdit, { producto_id: "", cantidad: "" }])}>
+                        + Agregar producto
+                      </button>
+                      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, opacity: guardando ? 0.6 : 1 }}
+                          disabled={guardando} onClick={() => conGuardando(() => guardarEdicion(f))}>
+                          {guardando ? "Guardando…" : "Guardar cambios"}
+                        </button>
+                        <button style={S.btnSecundario} onClick={() => setEditando(null)}>Cancelar edición</button>
+                      </div>
                     </div>
-                  ))}
+                  ) : (
+                    <>
+                      {det.map(d => (
+                        <div key={d.id} style={S.cardRow}>
+                          <span>{nombreProducto(d.producto_id)}</span>
+                          {abierta ? (
+                            <input style={{ ...S.select, width: 100, padding: "6px 8px" }} type="number" min="0" step="0.001"
+                              value={aplicadas[d.id] ?? ""}
+                              onChange={e => setAplicadas({ ...aplicadas, [d.id]: e.target.value })} />
+                          ) : (
+                            <b style={{ color: "#e8f5e0" }}>
+                              {f.estado === "pendiente"
+                                ? `${Number(d.cantidad_recomendada)} ${unidadProducto(d.producto_id)}`
+                                : `${Number(d.cantidad_aplicada ?? d.cantidad_recomendada)} ${unidadProducto(d.producto_id)}`}
+                              {(f.estado === "modificada" && Number(d.cantidad_aplicada) !== Number(d.cantidad_recomendada)) &&
+                                <span style={{ color: "#5a9bd4" }}> (rec. {Number(d.cantidad_recomendada)})</span>}
+                            </b>
+                          )}
+                        </div>
+                      ))}
 
-                  {(f.estado === "aplicada" || f.estado === "modificada") && costoTotal > 0 && (
-                    <div style={{ textAlign: "right", fontWeight: 800, color: "#7fbf5a", marginTop: 6, fontSize: 13 }}>
-                      Costo: ${costoTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                    </div>
+                      {(f.estado === "aplicada" || f.estado === "modificada") && costoTotal > 0 && (
+                        <div style={{ textAlign: "right", fontWeight: 800, color: "#7fbf5a", marginTop: 6, fontSize: 13 }}>
+                          Costo: ${costoTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                        </div>
+                      )}
+                    </>
                   )}
 
                   {abierta && (
@@ -1202,19 +1316,23 @@ export default function Fertilizaciones() {
                         </div>
                       )}
                       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={() => confirmarAplicacion(f)}>
-                          ✅ Confirmar aplicación
+                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, opacity: guardando ? 0.6 : 1 }}
+                          disabled={guardando} onClick={() => conGuardando(() => confirmarAplicacion(f))}>
+                          {guardando ? "Guardando…" : "✅ Confirmar aplicación"}
                         </button>
                         <button style={S.btnSecundario} onClick={() => setConfirmando(null)}>Cerrar</button>
                       </div>
                     </>
                   )}
 
-                  {f.estado === "pendiente" && !abierta && (
-                    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                  {f.estado === "pendiente" && !abierta && !editandoEsta && (
+                    <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                       <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={() => abrirConfirmacion(f)}>
                         Registrar aplicación
                       </button>
+                      {puedeRecomendar && (
+                        <button style={S.btnSecundario} onClick={() => abrirEdicion(f)}>✏️ Editar</button>
+                      )}
                       {puedeRecomendar && (
                         <button style={{ ...S.btnSecundario, color: "#e05c5c", borderColor: "rgba(224,92,92,0.4)" }}
                           onClick={() => cancelarRecomendacion(f)}>Cancelar</button>
@@ -1295,7 +1413,7 @@ export default function Fertilizaciones() {
                 </button>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                  <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={guardarReceta}>Guardar receta</button>
+                  <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, opacity: guardando ? 0.6 : 1 }} disabled={guardando} onClick={() => conGuardando(guardarReceta)}>{guardando ? "Guardando…" : "Guardar receta"}</button>
                   <button style={S.btnSecundario} onClick={() => setCreandoReceta(false)}>Cancelar</button>
                 </div>
               </div>
@@ -1447,8 +1565,9 @@ export default function Fertilizaciones() {
                         ))}
                       </div>
                       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, padding: 10 }} onClick={() => guardarProgramacion(r.id)}>
-                          Guardar programación
+                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, padding: 10, opacity: guardando ? 0.6 : 1 }}
+                          disabled={guardando} onClick={() => conGuardando(() => guardarProgramacion(r.id))}>
+                          {guardando ? "Guardando…" : "Guardar programación"}
                         </button>
                         <button style={S.btnSecundario} onClick={() => setProgramando(null)}>Cerrar</button>
                       </div>
@@ -1545,8 +1664,9 @@ export default function Fertilizaciones() {
                         ⚠️ La etapa actual se cerrará (queda en historial) y la semana fenológica se reiniciará desde esta fecha.
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
-                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, padding: 10 }} onClick={() => iniciarEtapa(s.sector_id)}>
-                          Iniciar etapa
+                        <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1, padding: 10, opacity: guardando ? 0.6 : 1 }}
+                          disabled={guardando} onClick={() => conGuardando(() => iniciarEtapa(s.sector_id))}>
+                          {guardando ? "Guardando…" : "Iniciar etapa"}
                         </button>
                         <button style={S.btnSecundario} onClick={() => setNuevaEtapa(null)}>Cancelar</button>
                       </div>
@@ -1607,7 +1727,7 @@ export default function Fertilizaciones() {
                 <input style={S.select} value={med.notas} onChange={e => setMed({ ...med, notas: e.target.value })} />
               </div>
 
-              <button style={S.btnPrimary} onClick={guardarMedicion}>Guardar medición</button>
+              <button style={{ ...S.btnPrimary, opacity: guardando ? 0.6 : 1 }} disabled={guardando} onClick={() => conGuardando(guardarMedicion)}>{guardando ? "Guardando…" : "Guardar medición"}</button>
             </div>
 
             <div style={S.card}>
