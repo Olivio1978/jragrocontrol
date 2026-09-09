@@ -1,11 +1,5 @@
-// ============ JR AGROCONTROL — Empleados.jsx v0.5.0 ============
-// Módulo 5. Primera versión versionada formalmente.
-// Cambio de esta versión: los tres chequeos de rol que antes comparaban
-// contra "admin" directo ahora usan el helper compartido esAdmin()
-// (src/lib/permisos.js), para que la cuenta superadmin también tenga acceso.
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabaseClient";
-import { esAdmin } from "./lib/permisos";
 
 // ============ CATÁLOGOS FIJOS DE UI ============
 const TIPOS_CONTRATACION = [
@@ -53,12 +47,11 @@ function vacioLaboral(ranchoIdDefault) {
   return {
     rancho_id: ranchoIdDefault || "", tipo_empleo_id: "",
     fecha_ingreso: todayISO(), fecha_salida: "",
-    tipo_contratacion: "eventual", registrado_driscolls: true,
+    tipo_contratacion: "eventual", registrado_driscolls: false,
     observaciones: "", activo: true,
   };
 }
 
-// Traduce errores comunes de Postgres/Supabase a mensajes entendibles en campo
 function mensajeError(error) {
   if (!error) return "";
   if (error.code === "23505") {
@@ -76,7 +69,7 @@ function mensajeError(error) {
   return error.message;
 }
 
-// ============ PANTALLA DE ACCESO (idéntica a Asistencia.jsx) ============
+// ============ PANTALLA DE ACCESO ============
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -117,28 +110,23 @@ function Login() {
 }
 
 export default function Empleados() {
-  // ---- Sesión y perfil ----
   const [sesion, setSesion] = useState(undefined);
   const [usuarioActual, setUsuarioActual] = useState(null);
   const [errorCarga, setErrorCarga] = useState("");
 
-  // ---- Catálogos ----
   const [ranchos, setRanchos] = useState([]);
   const [tiposEmpleo, setTiposEmpleo] = useState([]);
 
-  // ---- Lista de empleados ----
   const [empleados, setEmpleados] = useState([]);
   const [cargandoLista, setCargandoLista] = useState(false);
 
-  // ---- Filtros ----
   const [filtroRancho, setFiltroRancho] = useState("todos");
   const [filtroEstatus, setFiltroEstatus] = useState("activos");
   const [busqueda, setBusqueda] = useState("");
 
-  // ---- Modal de alta / edición ----
   const [modalAbierto, setModalAbierto] = useState(false);
-  const [empleadoEditando, setEmpleadoEditando] = useState(null); // null = alta nueva
-  const [modoAlta, setModoAlta] = useState("elegir"); // elegir | nueva | reingreso
+  const [empleadoEditando, setEmpleadoEditando] = useState(null);
+  const [modoAlta, setModoAlta] = useState("elegir");
   const [curpBusqueda, setCurpBusqueda] = useState("");
   const [personaEncontrada, setPersonaEncontrada] = useState(null);
   const [buscandoPersona, setBuscandoPersona] = useState(false);
@@ -148,14 +136,12 @@ export default function Empleados() {
   const [guardando, setGuardando] = useState(false);
   const [errorModal, setErrorModal] = useState("");
 
-  // ---- 1. Sesión ----
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSesion(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => setSesion(s));
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  // ---- 1.b Limpieza de estado al cambiar de usuario (mismo patrón que Asistencia.jsx) ----
   useEffect(() => {
     setUsuarioActual(null);
     setEmpleados([]);
@@ -165,7 +151,6 @@ export default function Empleados() {
     cerrarModal();
   }, [sesion?.user?.id]);
 
-  // ---- 2. Perfil ----
   useEffect(() => {
     if (!sesion) return;
     supabase
@@ -182,18 +167,16 @@ export default function Empleados() {
       });
   }, [sesion]);
 
-  // ---- 3. Catálogos (solo si es admin o superadmin) ----
   useEffect(() => {
-    if (!usuarioActual || !esAdmin(usuarioActual)) return;
+    if (!usuarioActual || usuarioActual.rol !== "admin") return;
     supabase.from("ranchos").select("id, nombre").eq("activo", true).order("nombre")
       .then(({ data, error }) => { if (!error) setRanchos(data || []); });
     supabase.from("tipos_empleo").select("id, nombre, color").eq("activo", true).order("nombre")
       .then(({ data, error }) => { if (!error) setTiposEmpleo(data || []); });
   }, [usuarioActual]);
 
-  // ---- 4. Lista de empleados según filtros ----
   const cargarEmpleados = () => {
-    if (!usuarioActual || !esAdmin(usuarioActual)) return;
+    if (!usuarioActual || usuarioActual.rol !== "admin") return;
     setCargandoLista(true);
     let query = supabase
       .from("empleados")
@@ -231,7 +214,6 @@ export default function Empleados() {
     });
   }, [empleados, busqueda]);
 
-  // ---- Salario configurado para rancho + tipo de empleo elegidos (solo lectura) ----
   useEffect(() => {
     if (!laboralForm.rancho_id || !laboralForm.tipo_empleo_id) { setSalarioInfo(null); return; }
     supabase
@@ -243,7 +225,6 @@ export default function Empleados() {
       .then(({ data }) => setSalarioInfo(data || null));
   }, [laboralForm.rancho_id, laboralForm.tipo_empleo_id]);
 
-  // ---- Abrir modal: alta nueva ----
   const abrirAlta = () => {
     setEmpleadoEditando(null);
     setModoAlta("elegir");
@@ -255,7 +236,6 @@ export default function Empleados() {
     setModalAbierto(true);
   };
 
-  // ---- Abrir modal: edición de un registro existente ----
   const abrirEdicion = (empleado) => {
     setEmpleadoEditando(empleado);
     setModoAlta("edicion");
@@ -288,7 +268,6 @@ export default function Empleados() {
     setErrorModal("");
   };
 
-  // ---- Buscar persona por CURP (para reingreso) ----
   const buscarPorCurp = async () => {
     const curp = limpiar(curpBusqueda);
     if (!curp) return;
@@ -329,6 +308,20 @@ export default function Empleados() {
     setGuardando(true);
     setErrorModal("");
 
+    // ====== DIAGNÓSTICO TEMPORAL — quitar una vez resuelto el error de RLS ======
+    const { data: userData } = await supabase.auth.getUser();
+    const { data: perfilDebug, error: errorPerfilDebug } = await supabase
+      .from("usuarios")
+      .select("id, nombre_completo, rol")
+      .eq("id", userData?.user?.id)
+      .single();
+    console.log("=== DIAGNÓSTICO ALTA EMPLEADO ===");
+    console.log("auth.uid() visto por el cliente:", userData?.user?.id);
+    console.log("correo de sesión:", userData?.user?.email);
+    console.log("perfil leído de 'usuarios' en este momento:", perfilDebug, errorPerfilDebug);
+    console.log("==================================");
+    // ====== FIN DIAGNÓSTICO TEMPORAL ======
+
     const datosPersona = {
       nombres: personaForm.nombres.trim(),
       apellidos: personaForm.apellidos.trim(),
@@ -360,7 +353,6 @@ export default function Empleados() {
       activo: laboralForm.activo,
     };
 
-    // --- Caso 1: edición de un registro existente ---
     if (empleadoEditando) {
       const { error: errPersona } = await supabase
         .from("personas")
@@ -380,17 +372,18 @@ export default function Empleados() {
       return;
     }
 
-    // --- Caso 2: reingreso de una persona ya existente en el sistema ---
     let personaId = personaEncontrada?.id || null;
 
-    // --- Caso 3: persona nueva -> se crea primero su ficha ---
     if (!personaId) {
       const { data: nuevaPersona, error: errPersona } = await supabase
         .from("personas")
         .insert(datosPersona)
         .select("id")
         .single();
-      if (errPersona) { setGuardando(false); setErrorModal(mensajeError(errPersona)); return; }
+      if (errPersona) {
+        console.log("Error exacto del insert a personas:", errPersona);
+        setGuardando(false); setErrorModal(mensajeError(errPersona)); return;
+      }
       personaId = nuevaPersona.id;
     }
 
@@ -404,7 +397,6 @@ export default function Empleados() {
     cargarEmpleados();
   };
 
-  // ---- Baja rápida desde la lista ----
   const darDeBaja = async (empleado) => {
     if (!window.confirm(`¿Dar de baja a ${nombreCompleto(empleado.personas)}? Se registrará hoy como fecha de salida.`)) return;
     const { error } = await supabase
@@ -426,7 +418,6 @@ export default function Empleados() {
 
   const cerrarSesion = async () => { await supabase.auth.signOut(); };
 
-  // ---- Estados de carga / acceso ----
   if (sesion === undefined) {
     return <div style={styles.page}><div style={styles.container}>Cargando…</div></div>;
   }
@@ -441,12 +432,11 @@ export default function Empleados() {
       </div>
     );
   }
-  if (!esAdmin(usuarioActual)) {
+  if (usuarioActual.rol !== "admin") {
     return (
       <div style={styles.page}>
         <div style={styles.container}>
           <div style={styles.eyebrow}>JR AGROCONTROL · EMPLEADOS</div>
-          <div style={styles.version}>v0.5.0</div>
           <h1 style={styles.title}>Acceso restringido</h1>
           <div style={{ ...styles.avisoRestriccion, marginTop: "16px" }}>
             Esta pantalla es exclusiva para el administrador. Tu cuenta tiene rol de {usuarioActual.rol}.
@@ -461,21 +451,17 @@ export default function Empleados() {
     <div style={styles.page}>
       <div style={styles.container}>
 
-        {/* Header */}
         <div style={styles.header}>
           <div>
             <div style={styles.eyebrow}>JR AGROCONTROL · EMPLEADOS</div>
             <h1 style={styles.title}>Catálogo de Empleados</h1>
             <div style={styles.usuarioTag}>
-              {usuarioActual.nombre} · {usuarioActual.rol}
+              {usuarioActual.nombre} · admin
               {" · "}
               <button onClick={cerrarSesion} style={styles.logoutLink}>Cerrar sesión</button>
             </div>
           </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={styles.headerIcon}>🗂️</div>
-            <div style={styles.version}>v0.5.0</div>
-          </div>
+          <div style={styles.headerIcon}>🗂️</div>
         </div>
 
         {errorCarga && (
@@ -484,7 +470,6 @@ export default function Empleados() {
           </div>
         )}
 
-        {/* Filtros */}
         <div style={styles.selectorsCard}>
           <div style={styles.selectorGroup}>
             <label style={styles.label}>Rancho</label>
@@ -517,7 +502,6 @@ export default function Empleados() {
           + Nuevo empleado
         </button>
 
-        {/* Lista */}
         {cargandoLista ? (
           <div style={styles.empty}>Cargando…</div>
         ) : empleadosFiltrados.length === 0 ? (
@@ -558,7 +542,6 @@ export default function Empleados() {
         <div style={styles.footerNote}>{empleadosFiltrados.length} empleado(s)</div>
       </div>
 
-      {/* ============ MODAL: Alta / Edición ============ */}
       {modalAbierto && (
         <div style={styles.modalOverlay} onClick={cerrarModal}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -573,7 +556,6 @@ export default function Empleados() {
               </div>
             )}
 
-            {/* Paso inicial de alta: nueva persona vs reingreso */}
             {!empleadoEditando && modoAlta === "elegir" && (
               <div style={styles.modalSection}>
                 <label style={styles.label}>¿Es una persona que ya trabajó antes en JR AgroControl?</label>
@@ -605,7 +587,6 @@ export default function Empleados() {
               </div>
             )}
 
-            {/* Formulario completo: nueva persona, reingreso confirmado, o edición */}
             {(empleadoEditando || modoAlta === "nueva" || modoAlta === "reingreso") && (
               <>
                 <div style={styles.modalSection}>
@@ -695,7 +676,6 @@ export default function Empleados() {
   );
 }
 
-// ============ Subcomponentes de formulario ============
 function Campo({ label, value, onChange, type = "text", disabled = false }) {
   return (
     <div style={{ ...styles.selectorGroup, marginTop: "10px" }}>
@@ -717,7 +697,6 @@ function CampoSelect({ label, value, onChange, opciones }) {
   );
 }
 
-// ============ Estilos (mismo lenguaje visual que Asistencia.jsx) ============
 const styles = {
   page: {
     minHeight: "100vh",
@@ -732,7 +711,6 @@ const styles = {
   eyebrow: { fontSize: "11px", letterSpacing: "0.12em", color: "#7fbf5a", marginBottom: "4px", fontWeight: "600" },
   title: { fontSize: "26px", fontWeight: "800", margin: 0, color: "#ffffff" },
   headerIcon: { fontSize: "36px" },
-  version: { fontSize: "10px", color: "rgba(127,191,90,0.5)", textAlign: "right", marginTop: "2px" },
   usuarioTag: { fontSize: "11px", color: "rgba(200,230,180,0.55)", marginTop: "4px" },
   logoutLink: { background: "none", border: "none", padding: 0, color: "#e8a23d", fontSize: "11px", textDecoration: "underline", cursor: "pointer", fontFamily: "inherit" },
   avisoRestriccion: { background: "rgba(232,162,61,0.12)", border: "1px solid rgba(232,162,61,0.3)", borderRadius: "12px", padding: "12px 14px", fontSize: "12px", lineHeight: "1.5", color: "#e8a23d", marginBottom: "16px" },
@@ -761,4 +739,3 @@ const styles = {
   textarea: { width: "100%", background: "rgba(0,0,0,0.25)", border: "1px solid rgba(127,191,90,0.25)", borderRadius: "10px", padding: "10px 12px", color: "#e8f5e0", fontSize: "13px", minHeight: "70px", fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" },
   modalGuardar: { width: "100%", background: "linear-gradient(135deg, #5aab2e, #3d8c1a)", color: "#ffffff", border: "none", borderRadius: "12px", padding: "14px", fontSize: "14px", fontWeight: "700", cursor: "pointer" },
 };
-
