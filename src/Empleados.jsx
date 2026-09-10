@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Empleados.jsx v0.5.2-debug2 (diagnóstico temporal RLS) ============
+// ============ JR AGROCONTROL — Empleados.jsx v0.5.2 (RLS de personas_select corregida) ============
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabaseClient";
 
@@ -309,25 +309,6 @@ export default function Empleados() {
     setGuardando(true);
     setErrorModal("");
 
-    // ====== DIAGNÓSTICO TEMPORAL — quitar una vez resuelto el error de RLS ======
-    const { data: userData } = await supabase.auth.getUser();
-    const { data: perfilDebug, error: errorPerfilDebug } = await supabase
-      .from("usuarios")
-      .select("id, nombre_completo, rol")
-      .eq("id", userData?.user?.id)
-      .single();
-    console.log("=== DIAGNÓSTICO ALTA EMPLEADO (Empleados.jsx v0.5.2-debug2) ===");
-    console.log("auth.uid() visto por el cliente:", userData?.user?.id);
-    console.log("correo de sesión:", userData?.user?.email);
-    console.log("perfil leído de 'usuarios' en este momento:", perfilDebug, errorPerfilDebug);
-
-    const { data: rolRPC, error: errorRolRPC } = await supabase.rpc("rol_actual");
-    console.log("rol_actual() llamado directo vía RPC:", rolRPC, errorRolRPC);
-    const { data: empresaRPC, error: errorEmpresaRPC } = await supabase.rpc("empresa_actual");
-    console.log("empresa_actual() llamado directo vía RPC:", empresaRPC, errorEmpresaRPC);
-    console.log("==================================");
-    // ====== FIN DIAGNÓSTICO TEMPORAL ======
-
     const datosPersona = {
       nombres: personaForm.nombres.trim(),
       apellidos: personaForm.apellidos.trim(),
@@ -387,7 +368,6 @@ export default function Empleados() {
         .select("id")
         .single();
       if (errPersona) {
-        console.log("Error exacto del insert a personas:", errPersona);
         setGuardando(false); setErrorModal(mensajeError(errPersona)); return;
       }
       personaId = nuevaPersona.id;
@@ -545,7 +525,7 @@ export default function Empleados() {
           </div>
         )}
 
-        <div style={styles.footerNote}>{empleadosFiltrados.length} empleado(s) · v0.5.2-debug2</div>
+        <div style={styles.footerNote}>{empleadosFiltrados.length} empleado(s) · v0.5.2</div>
       </div>
 
       {modalAbierto && (
