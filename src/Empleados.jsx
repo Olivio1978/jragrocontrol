@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Empleados.jsx v0.5.1-debug1 (diagnóstico temporal RLS) ============
+// ============ JR AGROCONTROL — Empleados.jsx v0.5.2-debug2 (diagnóstico temporal RLS) ============
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./lib/supabaseClient";
 
@@ -316,10 +316,15 @@ export default function Empleados() {
       .select("id, nombre_completo, rol")
       .eq("id", userData?.user?.id)
       .single();
-    console.log("=== DIAGNÓSTICO ALTA EMPLEADO (Empleados.jsx v0.5.1-debug1) ===");
+    console.log("=== DIAGNÓSTICO ALTA EMPLEADO (Empleados.jsx v0.5.2-debug2) ===");
     console.log("auth.uid() visto por el cliente:", userData?.user?.id);
     console.log("correo de sesión:", userData?.user?.email);
     console.log("perfil leído de 'usuarios' en este momento:", perfilDebug, errorPerfilDebug);
+
+    const { data: rolRPC, error: errorRolRPC } = await supabase.rpc("rol_actual");
+    console.log("rol_actual() llamado directo vía RPC:", rolRPC, errorRolRPC);
+    const { data: empresaRPC, error: errorEmpresaRPC } = await supabase.rpc("empresa_actual");
+    console.log("empresa_actual() llamado directo vía RPC:", empresaRPC, errorEmpresaRPC);
     console.log("==================================");
     // ====== FIN DIAGNÓSTICO TEMPORAL ======
 
@@ -540,7 +545,7 @@ export default function Empleados() {
           </div>
         )}
 
-        <div style={styles.footerNote}>{empleadosFiltrados.length} empleado(s) · v0.5.1-debug1</div>
+        <div style={styles.footerNote}>{empleadosFiltrados.length} empleado(s) · v0.5.2-debug2</div>
       </div>
 
       {modalAbierto && (
