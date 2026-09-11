@@ -1,4 +1,9 @@
-// ============ JR AGROCONTROL — App.jsx v0.3.11 ============
+// ============ JR AGROCONTROL — App.jsx v0.3.12 ============
+// v0.3.12: se agrega el módulo "Compras" (Módulo 9): registro de compras
+// como evento con cabecera + líneas (proveedor, factura CFDI o remisión,
+// productos), que reemplaza a la entrada suelta "🛒 Compra" que existía en
+// Almacén (retirada en Almacen.jsx v0.3.30). Recibe onNavigate, igual que
+// Almacén, para poder cruzar entre ambos módulos más adelante.
 // v0.3.11: se agrega el módulo "Sanidad" (Módulo 8): registro de
 // aplicaciones fitosanitarias en campo (control de plagas ligado a
 // Listas Autorizadas + nutrientes/coadyuvantes acompañantes en el
@@ -15,6 +20,7 @@ import Almacen from "./src/Almacen";
 import Fertilizaciones from "./src/Fertilizaciones";
 import ListasAutorizadas from "./src/ListasAutorizadas";
 import Sanidad from "./src/Sanidad";
+import Compras from "./src/Compras";
 
 const MODULOS = [
   { key: "asistencia",      label: "Asistencia",      icono: "👷" },
@@ -25,6 +31,7 @@ const MODULOS = [
   { key: "fertilizaciones", label: "Fertilización",   icono: "💧" },
   { key: "listas",          label: "Listas Autorizadas", icono: "📋" },
   { key: "sanidad",         label: "Sanidad",         icono: "🧪" },
+  { key: "compras",         label: "Compras",         icono: "🧾" },
 ];
 
 export default function App() {
@@ -69,6 +76,7 @@ export default function App() {
       {modulo === "fertilizaciones" && <Fertilizaciones />}
       {modulo === "listas"          && <ListasAutorizadas />}
       {modulo === "sanidad"         && <Sanidad />}
+      {modulo === "compras"         && <Compras onNavigate={setModulo} />}
     </div>
   );
 }
