@@ -1,4 +1,11 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.29 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.30 ============
+// v0.3.30: se retira la opción "🛒 Compra" de Entradas y ajustes (junto con
+// su campo de costo, que solo aplicaba a ese tipo). Las compras ahora se
+// registran desde el módulo Compras (Compras.jsx v0.8.0), como un evento
+// con cabecera + líneas y datos de factura, en vez de entradas sueltas por
+// producto. Entradas y ajustes queda solo para donación/muestra y ajustes
+// de inventario (sobrante/merma), que no llevan costo. Los movimientos
+// entrada_compra ya existentes en el histórico no se modifican.
 // v0.3.29: enlace discreto hacia el módulo Listas Autorizadas desde la
 // pantalla de alta de fitosanitario nuevo (solo visible para admin/
 // superadmin), para cargar una lista completa en vez de un producto suelto.
@@ -88,7 +95,6 @@ function hace30dias() {
 
 // ============ CONSTANTES ============
 const TIPOS_ENTRADA = [
-  { value: "entrada_compra",   label: "🛒 Compra" },
   { value: "entrada_donacion", label: "🎁 Donación / muestra" },
   { value: "ajuste_entrada",   label: "➕ Ajuste de entrada (sobrante)" },
   { value: "ajuste_salida",    label: "➖ Ajuste de salida (merma)" },
@@ -241,7 +247,7 @@ export default function Almacen({ onNavigate }) {
   const [pestana, setPestana] = useState("existencias");
 
   // ---- Formularios ----
-  const [mov, setMov] = useState({ tipo: "entrada_compra", bodega_id: "", producto_id: "", cantidad: "", costo: "", notas: "" });
+  const [mov, setMov] = useState({ tipo: "entrada_donacion", bodega_id: "", producto_id: "", cantidad: "", notas: "" });
   const [tras, setTras] = useState({ origen: "", destino: "", notas: "" });
   const [lineas, setLineas] = useState([{ producto_id: "", cantidad: "" }]);
   const [confirmando, setConfirmando] = useState(null);
@@ -487,13 +493,13 @@ export default function Almacen({ onNavigate }) {
       producto_id: mov.producto_id,
       tipo_movimiento: mov.tipo,
       cantidad: Number(mov.cantidad),
-      costo_unitario: mov.tipo === "entrada_compra" ? Number(mov.costo || 0) : 0,
+      costo_unitario: 0, // ningún tipo de Entradas y ajustes lleva costo; las compras se registran en Compras.jsx
       notas: mov.notas || null,
       creado_por: usuarioActual.id,
     });
     if (e) return setError(e.message);
     avisar("Movimiento registrado.");
-    setMov({ tipo: "entrada_compra", bodega_id: "", producto_id: "", cantidad: "", costo: "", notas: "" });
+    setMov({ tipo: "entrada_donacion", bodega_id: "", producto_id: "", cantidad: "", notas: "" });
     await cargarDatos();
   }
 
@@ -974,19 +980,7 @@ export default function Almacen({ onNavigate }) {
                 <input style={S.select} type="number" min="0" step="0.001" value={mov.cantidad}
                   onChange={e => setMov({ ...mov, cantidad: e.target.value })} />
               </div>
-              {mov.tipo === "entrada_compra" && (
-                <div style={{ ...S.formGroup, flex: 1 }}>
-                  <label style={S.label}>COSTO POR {unidadProducto(mov.producto_id)?.toUpperCase() || "UNIDAD"} ($)</label>
-                  <input style={S.select} type="number" min="0" step="0.01" value={mov.costo}
-                    onChange={e => setMov({ ...mov, costo: e.target.value })} />
-                </div>
-              )}
             </div>
-            {mov.tipo === "entrada_compra" && (
-              <div style={{ fontSize: 11, color: "rgba(200,230,180,0.5)", marginTop: -8, marginBottom: 12 }}>
-                Este costo actualizará el precio de referencia del producto.
-              </div>
-            )}
 
             <div style={S.formGroup}>
               <label style={S.label}>NOTAS</label>
