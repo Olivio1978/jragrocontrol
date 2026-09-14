@@ -330,6 +330,10 @@ export default function Compras({ onNavigate }) {
   const [cancelandoId, setCancelandoId] = useState(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState("");
 
+  // ---- Alta de proveedor en captura manual (cuando el XML no lo trajo) ----
+  const [mostrarNuevoProveedor, setMostrarNuevoProveedor] = useState(false);
+  const [nuevoProveedorForm, setNuevoProveedorForm] = useState({ razon_social: "", rfc: "", regimen_fiscal: "" });
+
   const inputXmlRef = useRef(null);
 
   // ---- 1. Sesión ----
@@ -412,6 +416,19 @@ export default function Compras({ onNavigate }) {
     setArchivoXml(null);
     setNombreArchivoXml("");
     setProveedorNoEncontrado(false);
+    setMostrarNuevoProveedor(false);
+    setNuevoProveedorForm({ razon_social: "", rfc: "", regimen_fiscal: "" });
+  }
+
+  const RFC_REGEX = /^[A-ZÑ&]{3,4}[0-9]{6}[A-Z0-9]{3}$/;
+  function confirmarNuevoProveedor() {
+    const razon = nuevoProveedorForm.razon_social.trim();
+    if (!razon) { setError("Captura la razón social del proveedor."); return; }
+    const rfc = nuevoProveedorForm.rfc.trim().toUpperCase();
+    if (rfc && !RFC_REGEX.test(rfc)) { setError("El RFC no tiene un formato válido (déjalo vacío si no lo tienes a la mano)."); return; }
+    setCab((c) => ({ ...c, proveedor_id: "", proveedor_nuevo: { razon_social: razon, rfc: rfc || null, regimen_fiscal: nuevoProveedorForm.regimen_fiscal.trim() || null } }));
+    setMostrarNuevoProveedor(false);
+    setError(null);
   }
   useEffect(() => { if (bodegaCentral && !cab.bodega_destino_id) setCab((c) => ({ ...c, bodega_destino_id: bodegaCentral.id })); }, [bodegaCentral]); // eslint-disable-line
 
@@ -804,13 +821,39 @@ export default function Compras({ onNavigate }) {
                   <label style={S.label}>PROVEEDOR</label>
                   {cab.proveedor_nuevo ? (
                     <div style={{ ...S.select, background: "rgba(127,191,90,0.08)" }}>
-                      🆕 {cab.proveedor_nuevo.razon_social} <span style={{ color: "rgba(200,230,180,0.5)" }}>({cab.proveedor_nuevo.rfc}) — se dará de alta al guardar</span>
+                      🆕 {cab.proveedor_nuevo.razon_social}
+                      {cab.proveedor_nuevo.rfc && <span style={{ color: "rgba(200,230,180,0.5)" }}> ({cab.proveedor_nuevo.rfc})</span>}
+                      <span style={{ color: "rgba(200,230,180,0.5)" }}> — se dará de alta al guardar</span>
+                      {" "}
+                      <button onClick={() => setCab({ ...cab, proveedor_nuevo: null })} style={{ background: "none", border: "none", color: "#e8a23d", cursor: "pointer", fontSize: 11, textDecoration: "underline" }}>cambiar</button>
+                    </div>
+                  ) : mostrarNuevoProveedor ? (
+                    <div style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(127,191,90,0.25)", borderRadius: 10, padding: 12 }}>
+                      <div style={S.formGroup}>
+                        <div style={S.lineaCampo}>RAZÓN SOCIAL *</div>
+                        <input style={S.select} value={nuevoProveedorForm.razon_social}
+                          onChange={(e) => setNuevoProveedorForm({ ...nuevoProveedorForm, razon_social: e.target.value })} />
+                      </div>
+                      <div style={S.formRow}>
+                        <div style={{ flex: 1 }}>
+                          <div style={S.lineaCampo}>RFC (opcional, si no traes factura)</div>
+                          <input style={S.select} value={nuevoProveedorForm.rfc}
+                            onChange={(e) => setNuevoProveedorForm({ ...nuevoProveedorForm, rfc: e.target.value.toUpperCase() })} />
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                        <button style={S.btnSecundario} onClick={confirmarNuevoProveedor}>Usar este proveedor</button>
+                        <button style={S.btnSecundario} onClick={() => setMostrarNuevoProveedor(false)}>Cancelar</button>
+                      </div>
                     </div>
                   ) : (
-                    <select style={S.select} value={cab.proveedor_id} onChange={(e) => setCab({ ...cab, proveedor_id: e.target.value })}>
-                      <option value="">— Selecciona —</option>
-                      {proveedores.map((p) => <option key={p.id} value={p.id}>{p.razon_social}{p.rfc ? ` (${p.rfc})` : ""}</option>)}
-                    </select>
+                    <div>
+                      <select style={S.select} value={cab.proveedor_id} onChange={(e) => setCab({ ...cab, proveedor_id: e.target.value })}>
+                        <option value="">— Selecciona —</option>
+                        {proveedores.map((p) => <option key={p.id} value={p.id}>{p.razon_social}{p.rfc ? ` (${p.rfc})` : ""}</option>)}
+                      </select>
+                      <button style={{ ...S.btnSecundario, marginTop: 8 }} onClick={() => setMostrarNuevoProveedor(true)}>+ Nuevo proveedor</button>
+                    </div>
                   )}
                 </div>
 
