@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.34 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.35 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -799,7 +799,7 @@ export default function Fertilizaciones() {
     for (const l of validas) {
       if (l.id) {
         const { error: e } = await supabase.from("fertilizacion_detalle")
-          .update({ cantidad_recomendada: Number(l.cantidad) }).eq("id", l.id);
+          .update({ producto_id: l.producto_id, cantidad_recomendada: Number(l.cantidad) }).eq("id", l.id);
         if (e) return setError(`${nombreProducto(l.producto_id)}: ${e.message}`);
       } else {
         const { error: e } = await supabase.from("fertilizacion_detalle").insert({
@@ -993,7 +993,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.34</div>
+            <div style={S.version}>v0.3.35</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
