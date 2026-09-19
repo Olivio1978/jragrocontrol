@@ -927,7 +927,7 @@ export default function Almacen({ onNavigate }) {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.29</div>
+            <div style={S.version}>v0.3.31</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
