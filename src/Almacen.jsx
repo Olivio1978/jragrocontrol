@@ -1,4 +1,12 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.30 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.31 ============
+// v0.3.31: registro sanitario (RSCO) con 3 estados — Sin capturar / En
+// trámite / Registrado — en vez de un solo campo de texto, para no bloquear
+// productos de marcas secundarias en trámite ni confundirlos con los que
+// nadie ha revisado. Se captura en los tres lugares donde se edita un
+// producto: alta/edición normal (nutricional/bioestimulante/coadyuvante),
+// alta de fitosanitario "fuera de lista", y la ficha de precio de los
+// fitosanitarios que vienen de tu Lista Autorizada (ahí vive la mayoría).
+// Requiere la columna estado_rsco en productos_insumos (ver chat de Compras).
 // v0.3.30: se retira la opción "🛒 Compra" de Entradas y ajustes (junto con
 // su campo de costo, que solo aplicaba a ese tipo). Las compras ahora se
 // registran desde el módulo Compras (Compras.jsx v0.8.0), como un evento
@@ -122,6 +130,7 @@ const FORM_PRODUCTO_INICIAL = {
   pct_n: "", pct_p: "", pct_k: "", pct_ca: "", pct_mg: "", pct_s: "",
   pct_zn: "", pct_mn: "", pct_fe: "", pct_cu: "", pct_b: "",
   unidad_base: "kg", presentacion: "", contenido_presentacion: "", costo_unitario: "",
+  estado_rsco: "sin_capturar", registro_sanitario: "",
 };
 
 // Formulario simplificado para fitosanitarios "fuera de lista" (biorracionales
@@ -132,7 +141,17 @@ const FORM_FITO_FUERA_LISTA_INICIAL = {
   tipo_fitosanitario: "biorracional", unidad_base: "l",
   dosis_recomendada: "", intervalo_seguridad_horas: "", intervalo_reentrada: "", observaciones: "",
   costo_unitario: "", justificacion_fuera_lista: "",
+  estado_rsco: "sin_capturar", registro_sanitario: "",
 };
+
+// Los tres estados del registro sanitario (RSCO), independientes del número
+// en sí — ver Almacen.jsx v0.3.31. "registrado" exige número; los otros dos
+// nunca guardan uno (lo hace cumplir chk_pi_rsco_consistente en la BD).
+const ESTADOS_RSCO = [
+  { value: "sin_capturar", label: "Sin capturar", color: "#e8a23d" },
+  { value: "tramite",      label: "En trámite",   color: "#7fa8bf" },
+  { value: "registrado",   label: "Registrado",   color: "#7fbf5a" },
+];
 
 const TIPOS_FITOSANITARIO = [
   { value: "insecticida", label: "Insecticida" },
@@ -178,6 +197,38 @@ const S = {
   dropdownBusqueda: { position: "absolute", zIndex: 20, left: 0, right: 0, top: "100%", marginTop: "4px", maxHeight: "260px", overflowY: "auto", background: "#0f2818", border: "1px solid rgba(127,191,90,0.35)", borderRadius: "10px", boxShadow: "0 8px 24px rgba(0,0,0,0.4)" },
   dropdownItem: { padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)", cursor: "pointer" },
 };
+
+// ============ SELECTOR DE RSCO (reutilizable en los 3 formularios de producto) ============
+// v0.3.31: registro sanitario con 3 estados en vez de un solo campo de texto,
+// para no bloquear productos de marcas secundarias "en trámite" ni confundirlos
+// con los que nadie ha revisado todavía. Ver chk_pi_rsco_consistente en la BD:
+// "registrado" siempre exige número; los otros dos nunca guardan uno.
+function SelectorRsco({ estado, numero, onEstado, onNumero }) {
+  return (
+    <div style={S.formGroup}>
+      <label style={S.label}>REGISTRO SANITARIO (RSCO)</label>
+      <div style={{ display: "flex", gap: 6, marginBottom: numero !== undefined && estado === "registrado" ? 8 : 0 }}>
+        {ESTADOS_RSCO.map((e) => (
+          <button key={e.value} type="button"
+            onClick={() => onEstado(e.value)}
+            style={{
+              ...S.selectSm, flex: 1, cursor: "pointer",
+              borderColor: estado === e.value ? e.color : "rgba(127,191,90,0.25)",
+              color: estado === e.value ? e.color : "rgba(200,230,180,0.5)",
+              background: estado === e.value ? `${e.color}22` : "rgba(0,0,0,0.25)",
+              fontWeight: estado === e.value ? 700 : 400,
+            }}>
+            {e.label}
+          </button>
+        ))}
+      </div>
+      {estado === "registrado" && (
+        <input style={S.select} placeholder="Número de registro" value={numero}
+          onChange={(e) => onNumero(e.target.value)} />
+      )}
+    </div>
+  );
+}
 
 // ============ PANTALLA DE LOGIN ============
 function Login() {
@@ -616,6 +667,7 @@ export default function Almacen({ onNavigate }) {
         observaciones: notas,
         costo_unitario: p.costo_unitario || "",
         justificacion_fuera_lista: justificacion,
+        estado_rsco: p.estado_rsco || "sin_capturar", registro_sanitario: p.registro_sanitario || "",
       });
       setEditandoProd(p.id);
       return;
@@ -631,6 +683,7 @@ export default function Almacen({ onNavigate }) {
       unidad_base: p.unidad_base, presentacion: p.presentacion || "",
       contenido_presentacion: p.contenido_presentacion || "",
       costo_unitario: p.costo_unitario || "",
+      estado_rsco: p.estado_rsco || "sin_capturar", registro_sanitario: p.registro_sanitario || "",
     });
     setEditandoProd(p.id);
   }
@@ -639,6 +692,8 @@ export default function Almacen({ onNavigate }) {
     if (!formProd.nombre_comercial.trim()) return setError("El producto necesita nombre comercial.");
     if (!formProd.via_fertirriego && !formProd.via_foliar && !formProd.via_suelo)
       return setError("Marca al menos una vía de aplicación.");
+    if (formProd.estado_rsco === "registrado" && !formProd.registro_sanitario.trim())
+      return setError("Captura el número de registro sanitario, o cambia el estado a 'En trámite' / 'Sin capturar'.");
 
     const num = v => (v === "" || v == null ? 0 : Number(v));
     const registro = {
@@ -656,6 +711,8 @@ export default function Almacen({ onNavigate }) {
       presentacion: formProd.presentacion.trim() || null,
       contenido_presentacion: formProd.contenido_presentacion === "" ? null : Number(formProd.contenido_presentacion),
       costo_unitario: num(formProd.costo_unitario),
+      estado_rsco: formProd.estado_rsco,
+      registro_sanitario: formProd.estado_rsco === "registrado" ? formProd.registro_sanitario.trim() : null,
     };
 
     let e;
@@ -682,6 +739,8 @@ export default function Almacen({ onNavigate }) {
       return setError("Explica por qué este producto no representa riesgo de auditoría aunque no esté en la lista.");
     if (listasProductor.length === 0)
       return setError("No existe todavía la lista 'Productor — Fuera de lista oficial'. Corre la migración v0.4.40 primero.");
+    if (formFitoNuevo.estado_rsco === "registrado" && !formFitoNuevo.registro_sanitario.trim())
+      return setError("Captura el número de registro sanitario, o cambia el estado a 'En trámite' / 'Sin capturar'.");
 
     const datosProducto = {
       nombre_comercial: formFitoNuevo.nombre_comercial.trim(),
@@ -691,6 +750,8 @@ export default function Almacen({ onNavigate }) {
       unidad_base: formFitoNuevo.unidad_base,
       via_foliar: true,
       costo_unitario: formFitoNuevo.costo_unitario === "" ? 0 : Number(formFitoNuevo.costo_unitario),
+      estado_rsco: formFitoNuevo.estado_rsco,
+      registro_sanitario: formFitoNuevo.estado_rsco === "registrado" ? formFitoNuevo.registro_sanitario.trim() : null,
     };
     // Solo lo intrínseco del químico vive en productos_fitosanitarios.
     const datosFito = {
@@ -750,12 +811,19 @@ export default function Almacen({ onNavigate }) {
     await cargarDatos();
   }
 
-  // ---- Actualiza solo el precio de referencia de un fitosanitario de lista oficial ----
-  async function guardarPrecioFito(productoId, nuevoPrecio) {
+  // ---- Actualiza el precio de referencia Y el RSCO de un fitosanitario de lista oficial ----
+  // (los datos regulatorios propios de la lista -moléculas, dosis, etc- no se tocan aquí)
+  async function guardarPrecioFito(productoId, nuevoPrecio, estadoRsco, numeroRsco) {
+    if (estadoRsco === "registrado" && !numeroRsco.trim())
+      return setError("Captura el número de registro sanitario, o cambia el estado a 'En trámite' / 'Sin capturar'.");
     const { error: e } = await supabase.from("productos_insumos")
-      .update({ costo_unitario: nuevoPrecio === "" ? 0 : Number(nuevoPrecio) }).eq("id", productoId);
+      .update({
+        costo_unitario: nuevoPrecio === "" ? 0 : Number(nuevoPrecio),
+        estado_rsco: estadoRsco,
+        registro_sanitario: estadoRsco === "registrado" ? numeroRsco.trim() : null,
+      }).eq("id", productoId);
     if (e) return setError(e.message);
-    avisar("Precio de referencia actualizado.");
+    avisar("Producto actualizado.");
     setEditandoProd(null);
     await cargarDatos();
   }
@@ -1289,6 +1357,9 @@ export default function Almacen({ onNavigate }) {
                         value={formFitoNuevo.justificacion_fuera_lista}
                         onChange={e => setFormFitoNuevo({ ...formFitoNuevo, justificacion_fuera_lista: e.target.value })} />
                     </div>
+                    <SelectorRsco estado={formFitoNuevo.estado_rsco} numero={formFitoNuevo.registro_sanitario}
+                      onEstado={(v) => setFormFitoNuevo({ ...formFitoNuevo, estado_rsco: v, registro_sanitario: v === "registrado" ? formFitoNuevo.registro_sanitario : "" })}
+                      onNumero={(v) => setFormFitoNuevo({ ...formFitoNuevo, registro_sanitario: v })} />
                     <div style={{ display: "flex", gap: 8 }}>
                       <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={guardarFitoFueraLista}>
                         {editandoProd === "nuevo" ? "Dar de alta fuera de lista" : "Guardar cambios"}
@@ -1319,10 +1390,13 @@ export default function Almacen({ onNavigate }) {
                         defaultValue={prodEditando.costo_unitario || ""}
                         onChange={e => setFormFitoNuevo({ ...formFitoNuevo, costo_unitario: e.target.value })} />
                     </div>
+                    <SelectorRsco estado={formFitoNuevo.estado_rsco} numero={formFitoNuevo.registro_sanitario}
+                      onEstado={(v) => setFormFitoNuevo({ ...formFitoNuevo, estado_rsco: v, registro_sanitario: v === "registrado" ? formFitoNuevo.registro_sanitario : "" })}
+                      onNumero={(v) => setFormFitoNuevo({ ...formFitoNuevo, registro_sanitario: v })} />
                     <div style={{ display: "flex", gap: 8 }}>
                       <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }}
-                        onClick={() => guardarPrecioFito(prodEditando.id, formFitoNuevo.costo_unitario)}>
-                        Guardar precio
+                        onClick={() => guardarPrecioFito(prodEditando.id, formFitoNuevo.costo_unitario, formFitoNuevo.estado_rsco, formFitoNuevo.registro_sanitario)}>
+                        Guardar cambios
                       </button>
                       <button style={S.btnSecundario} onClick={() => setEditandoProd(null)}>Cerrar</button>
                     </div>
@@ -1425,6 +1499,10 @@ export default function Almacen({ onNavigate }) {
                       onChange={e => setFormProd({ ...formProd, costo_unitario: e.target.value })} />
                   </div>
                 </div>
+
+                <SelectorRsco estado={formProd.estado_rsco} numero={formProd.registro_sanitario}
+                  onEstado={(v) => setFormProd({ ...formProd, estado_rsco: v, registro_sanitario: v === "registrado" ? formProd.registro_sanitario : "" })}
+                  onNumero={(v) => setFormProd({ ...formProd, registro_sanitario: v })} />
 
                 <div style={{ display: "flex", gap: 8 }}>
                   <button style={{ ...S.btnPrimary, marginBottom: 0, flex: 1 }} onClick={guardarProducto}>
