@@ -201,6 +201,15 @@ function elementosPorNombre(doc, nombreLocal) {
 function elementoPorNombre(doc, nombreLocal) {
   return elementosPorNombre(doc, nombreLocal)[0] || null;
 }
+// Busca solo entre los HIJOS DIRECTOS de un elemento — a diferencia de
+// elementoPorNombre, que busca en todo el documento. Necesario porque tanto
+// el Comprobante como cada Concepto traen su propio nodo <Impuestos>, y
+// buscar "Impuestos" a nivel documento puede regresar el de un producto en
+// vez del de la factura completa (ver v0.9.0, corrección de IEPS).
+function hijoDirectoPorNombre(el, nombreLocal) {
+  if (!el) return null;
+  return Array.from(el.children).find((c) => c.localName === nombreLocal) || null;
+}
 function attr(el, nombre) {
   return el ? el.getAttribute(nombre) || "" : "";
 }
@@ -251,17 +260,25 @@ function leerCFDI(xmlTexto) {
     total: attr(comprobante, "Total"),
   };
 
-  // Impuestos trasladados totales: si el nodo cfdi:Impuestos de la cabecera
-  // no trae TotalImpuestosTrasladados (común cuando todo va exento a 0%),
-  // se suma lo que traiga cada concepto.
-  const impuestosNodo = elementoPorNombre(doc, "Impuestos");
+  // Impuestos trasladados totales: se busca el <Impuestos> que cuelga
+  // directamente de Comprobante (no el de un Concepto, que aparece antes en
+  // el documento). Si no trae TotalImpuestosTrasladados (poco común), se
+  // suma lo que traiga cada concepto.
+  const impuestosNodo = hijoDirectoPorNombre(comprobante, "Impuestos");
   let ivaCabecera = attr(impuestosNodo, "TotalImpuestosTrasladados");
 
   const lineas = conceptos.map((c) => {
-    const traslados = elementosPorNombre(c, "Traslado").filter((t) => attr(t, "Impuesto") === "002");
-    const traslado = traslados[0] || null;
-    const tasaIva = traslado && attr(traslado, "TipoFactor") !== "Exento" ? attr(traslado, "TasaOCuota") : "";
-    const ivaImporte = traslado ? attr(traslado, "Importe") : "0";
+    const impuestosConcepto = hijoDirectoPorNombre(c, "Impuestos");
+    const trasladosConcepto = impuestosConcepto ? elementosPorNombre(impuestosConcepto, "Traslado") : [];
+    // La tasa mostrada es la de IVA (002) específicamente, solo informativa.
+    const trasladoIva = trasladosConcepto.find((t) => attr(t, "Impuesto") === "002");
+    const tasaIva = trasladoIva && attr(trasladoIva, "TipoFactor") !== "Exento" ? attr(trasladoIva, "TasaOCuota") : "";
+    // El importe que sí afecta el cuadre de la factura es la suma de TODOS
+    // los impuestos trasladados de la línea — muchos agroquímicos llevan
+    // IEPS (003) en vez de o además del IVA, no solo IVA (002).
+    const ivaImporte = trasladosConcepto
+      .reduce((acc, t) => acc + (parseFloat(attr(t, "Importe")) || 0), 0)
+      .toFixed(2);
 
     return {
       ...LINEA_VACIA,
