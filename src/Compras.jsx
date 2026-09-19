@@ -367,7 +367,7 @@ export default function Compras({ onNavigate }) {
     const [b, p, prov, eq, comp] = await Promise.all([
       supabase.from("bodegas").select("id, nombre, rancho_id, empresa_id").eq("activo", true).order("nombre"),
       fetchTodasLasFilas(() => supabase.from("productos_insumos")
-        .select("id, nombre_comercial, marca, categoria, unidad_base, contenido_presentacion, costo_unitario, activo, registro_sanitario")
+        .select("id, nombre_comercial, marca, categoria, unidad_base, contenido_presentacion, costo_unitario, activo, registro_sanitario, estado_rsco")
         .order("nombre_comercial")),
       supabase.from("proveedores").select("*").order("razon_social"),
       fetchTodasLasFilas(() => supabase.from("producto_equivalencias").select("*")),
@@ -521,7 +521,8 @@ export default function Compras({ onNavigate }) {
   });
   const lineasSinRsco = lineas.filter((l) => {
     const p = productoDe(l.producto_id);
-    return p?.categoria === "fitosanitario" && !p.registro_sanitario;
+    // "En trámite" no cuenta como pendiente — solo lo que nadie ha revisado todavía.
+    return p?.categoria === "fitosanitario" && (p?.estado_rsco || "sin_capturar") === "sin_capturar";
   });
 
   const puedeGuardar = lineas.length > 0
@@ -957,7 +958,7 @@ export default function Compras({ onNavigate }) {
                         )}
                       </div>
 
-                      {prod && !prod.registro_sanitario && prod.categoria === "fitosanitario" && (
+                      {prod && (prod.estado_rsco || "sin_capturar") === "sin_capturar" && prod.categoria === "fitosanitario" && (
                         <div style={{ ...S.warnBanner, marginBottom: 8, padding: "6px 10px" }}>⚠️ Sin RSCO registrado en el catálogo</div>
                       )}
 
