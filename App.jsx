@@ -1,10 +1,15 @@
-// ============ JR AGROCONTROL — App.jsx v0.3.12 ============
-// v0.3.12: se agrega el módulo "Compras" (Módulo 9): registro de compras
+// ============ JR AGROCONTROL — App.jsx v0.3.13 ============
+// v0.3.13: se agrega el módulo "Cosecha" (Módulo 8): registro de corte y
+// empaque de berries, con pestañas internas por rol (día, corte, empaque,
+// entregas). Es el módulo de operación diaria durante la temporada, así
+// que se coloca al inicio de la barra, junto a Asistencia, porque son los
+// dos que se usan todas las mañanas.
+// v0.3.12: se agregó el módulo "Compras" (Módulo 9): registro de compras
 // como evento con cabecera + líneas (proveedor, factura CFDI o remisión,
 // productos), que reemplaza a la entrada suelta "🛒 Compra" que existía en
 // Almacén (retirada en Almacen.jsx v0.3.30). Recibe onNavigate, igual que
 // Almacén, para poder cruzar entre ambos módulos más adelante.
-// v0.3.11: se agrega el módulo "Sanidad" (Módulo 8): registro de
+// v0.3.11: se agregó el módulo "Sanidad" (Módulo 8): registro de
 // aplicaciones fitosanitarias en campo (control de plagas ligado a
 // Listas Autorizadas + nutrientes/coadyuvantes acompañantes en el
 // mismo tanque), con el mismo patrón de dos acciones que Fertilización.
@@ -13,6 +18,7 @@
 // comercializadora propia de la empresa), exclusivo para admin/superadmin.
 import { useState } from "react";
 import Asistencia from "./src/Asistencia";
+import Cosecha from "./src/Cosecha";
 import Labores from "./src/Labores";
 import Empleados from "./src/Empleados";
 import Configuracion from "./src/Configuracion";
@@ -24,6 +30,7 @@ import Compras from "./src/Compras";
 
 const MODULOS = [
   { key: "asistencia",      label: "Asistencia",      icono: "👷" },
+  { key: "cosecha",         label: "Cosecha",         icono: "🧺" },
   { key: "labores",         label: "Labores",         icono: "🌾" },
   { key: "empleados",       label: "Empleados",       icono: "🗂️" },
   { key: "config",          label: "Config",          icono: "⚙️" },
@@ -69,6 +76,7 @@ export default function App() {
 
       {/* Módulo activo */}
       {modulo === "asistencia"      && <Asistencia />}
+      {modulo === "cosecha"         && <Cosecha />}
       {modulo === "labores"         && <Labores />}
       {modulo === "empleados"       && <Empleados />}
       {modulo === "config"          && <Configuracion />}
