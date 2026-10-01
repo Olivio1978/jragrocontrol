@@ -1,4 +1,9 @@
-// ============ JR AGROCONTROL — Cosecha.jsx v0.8.1 ============
+// ============ JR AGROCONTROL — Cosecha.jsx v0.8.2 ============
+// v0.8.2: se agrega la pantalla de inicio de sesión y el botón "Salir",
+// con el mismo patrón que el resto de los módulos (Asistencia, Compras).
+// Antes, al entrar sin sesión, este módulo solo mostraba un mensaje de
+// texto en vez del formulario de acceso.
+//
 // Módulo 8: Cosecha y Empaque. Primera entrega, con dos pestañas:
 //
 //   Día   — el encargado de rancho abre el día de cosecha, asigna
@@ -46,6 +51,61 @@ const ESTADO_DIA = {
   con_incidencias:  { label: "Con incidencias",  color: "#e8a23d" },
   cerrado:          { label: "Cerrado",          color: "#e05c5c" },
 };
+
+// ============ PANTALLA DE LOGIN ============
+// Mismo patrón que Asistencia y Compras. Pendiente de limpieza: extraer
+// este componente a src/lib/Login.jsx y que todos los módulos lo importen,
+// para dejar de repetirlo en cada archivo.
+function Login() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [cargando, setCargando] = useState(false);
+
+  const ingresar = async (e) => {
+    e.preventDefault();
+    setError("");
+    setCargando(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setCargando(false);
+    if (error) setError("Correo o contraseña incorrectos.");
+  };
+
+  return (
+    <div style={styles.page}>
+      <div style={{ ...styles.container, paddingTop: "60px" }}>
+        <div style={styles.eyebrow}>JR AGROCONTROL · COSECHA</div>
+        <h1 style={styles.title}>Iniciar sesión</h1>
+        <form onSubmit={ingresar} style={{ marginTop: "24px" }}>
+          <div style={styles.selectorGroup}>
+            <label style={styles.label}>CORREO</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              style={styles.select}
+              required
+            />
+          </div>
+          <div style={{ ...styles.selectorGroup, marginTop: "12px" }}>
+            <label style={styles.label}>CONTRASEÑA</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={styles.select}
+              required
+            />
+          </div>
+          {error && <p style={{ color: "#e05c5c", fontSize: "12px", marginTop: "8px" }}>{error}</p>}
+          <button type="submit" disabled={cargando} style={{ ...styles.guardarBtn, marginTop: "20px" }}>
+            {cargando ? "Ingresando…" : "Ingresar"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 export default function Cosecha() {
   // ---- Sesión y perfil ----
@@ -440,13 +500,11 @@ export default function Cosecha() {
 
   // ============ Render ============
 
-  if (sesion === undefined) {
-    return <div style={styles.page}><div style={styles.container}><p style={styles.empty}>Verificando sesión…</p></div></div>;
+  if (sesion === undefined || (sesion && !usuarioActual && !error)) {
+    return <div style={styles.page}><div style={styles.container}><p style={styles.empty}>Cargando…</p></div></div>;
   }
 
-  if (!sesion) {
-    return <div style={styles.page}><div style={styles.container}><p style={styles.empty}>Inicia sesión para usar el módulo.</p></div></div>;
-  }
+  if (!sesion) return <Login />;
 
   const estadoDia = dia ? ESTADO_DIA[dia.estado] : null;
   const puedeCapturar = puedeCapturarCorte(usuarioActual);
@@ -464,7 +522,10 @@ export default function Cosecha() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={styles.headerIcon}>🧺</div>
-            <div style={styles.version}>v0.8.1</div>
+            <div style={styles.version}>v0.8.2</div>
+            <button onClick={() => supabase.auth.signOut()} style={styles.logoutLink}>
+              Salir
+            </button>
           </div>
         </div>
 
@@ -831,6 +892,17 @@ const styles = {
   headerIcon: { fontSize: "36px" },
   version: { fontSize: "10px", color: "rgba(127,191,90,0.5)", textAlign: "right", marginTop: "2px" },
   usuarioTag: { fontSize: "11px", color: "rgba(200,230,180,0.45)", marginTop: "4px" },
+  logoutLink: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: "#e8a23d",
+    fontSize: "11px",
+    textDecoration: "underline",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    marginTop: "6px",
+  },
   selectorsCard: {
     background: "rgba(255,255,255,0.05)",
     border: "1px solid rgba(127,191,90,0.15)",
