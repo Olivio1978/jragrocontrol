@@ -1,4 +1,13 @@
-// ============ JR AGROCONTROL — Cosecha.jsx v0.8.3 ============
+// ============ JR AGROCONTROL — Cosecha.jsx v0.8.4 ============
+// v0.8.4: personal de apoyo al corte. En pico de cosecha se jala gente
+// de labores, y al final de temporada todos andan limpiando túneles.
+// Antes la lista solo mostraba a quienes tienen tipo de empleo "Corte",
+// así que un apoyo quedaba fuera. Ahora hay un interruptor para ver a
+// todo el personal con asistencia del día, sin cambiarle su tipo de
+// empleo, que es su condición de contratación y afecta su pago.
+//
+// Pendiente: registrar en Asistencia la actividad del día (corte,
+// labores, riego), que serviría a todos los módulos para costeo.
 // v0.8.3: captura directa, sin carretillero. Al inicio de temporada no
 // siempre hay carretillero: el cortador entrega sus cubetas directo al
 // encargado. Antes la pantalla exigía abrir un viaje y no dejaba
@@ -124,7 +133,9 @@ export default function Cosecha() {
   const [parametros, setParametros] = useState(null);
   const [tuneles, setTuneles] = useState([]);       // { id, numero, sector, sector_id }
   const [cortadores, setCortadores] = useState([]); // empleados tipo Corte con asistencia
+  const [apoyos, setApoyos] = useState([]);         // demás personal con asistencia
   const [carretilleros, setCarretilleros] = useState([]);
+  const [soloCortadores, setSoloCortadores] = useState(true);
 
   // ---- Estado del día ----
   const [fecha] = useState(todayISO());
@@ -275,6 +286,13 @@ export default function Cosecha() {
 
       setCortadores(conAsistencia.filter((e) => e.tipos_empleo?.nombre === "Corte"));
       setCarretilleros(conAsistencia.filter((e) => e.tipos_empleo?.nombre === "Carretillero"));
+      // Todo el demás personal presente: puede apoyar al corte sin que se
+      // le cambie su tipo de empleo.
+      setApoyos(
+        conAsistencia.filter(
+          (e) => !["Corte", "Carretillero"].includes(e.tipos_empleo?.nombre)
+        )
+      );
       setCargando(false);
     })();
   }, [ranchoId, fecha]);
@@ -517,17 +535,26 @@ export default function Cosecha() {
     return { exp, pro, total: exp + pro };
   }, [registrosActivos]);
 
+  // Base de la lista: cortadores de planta y, si se pide, el personal de
+  // apoyo. Quien ya tenga cubetas registradas hoy se queda visible aunque
+  // el interruptor esté en "solo cortadores", para no perderlo de vista.
+  const listaBase = useMemo(() => {
+    if (!soloCortadores) return [...cortadores, ...apoyos];
+    const conRegistro = new Set(registrosActivos.map((r) => r.cortador_id));
+    return [...cortadores, ...apoyos.filter((a) => conRegistro.has(a.id))];
+  }, [cortadores, apoyos, soloCortadores, registrosActivos]);
+
   // Cortadores que puede atender el carretillero según su zona
   const misCortadores = useMemo(() => {
     const hayZonas = Object.keys(zonas).length > 0;
-    if (!hayZonas || !carretilleroId) return cortadores;
+    if (!hayZonas || !carretilleroId) return listaBase;
 
-    return cortadores.filter((c) => {
+    return listaBase.filter((c) => {
       const sus = asignaciones[c.id] || [];
       if (sus.length === 0) return true; // sin túnel fijo: visible para todos
       return sus.some((t) => zonas[t] === carretilleroId);
     });
-  }, [cortadores, asignaciones, zonas, carretilleroId]);
+  }, [listaBase, asignaciones, zonas, carretilleroId]);
 
   const sectores = useMemo(() => {
     const vistos = {};
@@ -559,7 +586,7 @@ export default function Cosecha() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={styles.headerIcon}>🧺</div>
-            <div style={styles.version}>v0.8.3</div>
+            <div style={styles.version}>v0.8.4</div>
             <button onClick={() => supabase.auth.signOut()} style={styles.logoutLink}>
               Salir
             </button>
@@ -821,6 +848,22 @@ export default function Cosecha() {
                 {/* Lista de cortadores */}
                 {(viaje || modoDirecto) && (
                   <>
+                    {apoyos.length > 0 && (
+                      <div style={styles.filtroRow}>
+                        <span style={styles.filtroTexto}>
+                          {soloCortadores
+                            ? `Mostrando solo cortadores (${apoyos.length} más con asistencia)`
+                            : `Mostrando a todo el personal presente`}
+                        </span>
+                        <button
+                          onClick={() => setSoloCortadores((v) => !v)}
+                          style={styles.filtroBtn}
+                        >
+                          {soloCortadores ? "Ver a todos" : "Solo cortadores"}
+                        </button>
+                      </div>
+                    )}
+
                     <div style={styles.lista}>
                       {misCortadores.map((c) => {
                         const conteo = conteoPorCortador[c.id] || { exportacion: 0, proceso: 0 };
@@ -836,7 +879,14 @@ export default function Cosecha() {
                                   {iniciales(c.nombre_completo)}
                                 </div>
                                 <div style={{ minWidth: 0 }}>
-                                  <div style={styles.empleadoNombre}>{c.nombre_completo}</div>
+                                  <div style={styles.empleadoNombre}>
+                                    {c.nombre_completo}
+                                    {c.tipos_empleo?.nombre !== "Corte" && (
+                                      <span style={styles.apoyoTag}>
+                                        {c.tipos_empleo?.nombre || "apoyo"}
+                                      </span>
+                                    )}
+                                  </div>
                                   <div style={styles.empleadoTipo}>
                                     {tunelInfo
                                       ? `${tunelInfo.sector} · Túnel ${tunelInfo.numero}`
@@ -1022,6 +1072,34 @@ const styles = {
   chip: { flex: 1, background: "rgba(255,255,255,0.04)", border: "1px solid", borderRadius: "12px", padding: "10px 12px", textAlign: "center" },
   chipCount: { fontSize: "20px", fontWeight: "800" },
   chipLabel: { fontSize: "10px", color: "rgba(200,230,180,0.5)", marginTop: "2px" },
+  filtroRow: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    gap: "10px", marginBottom: "10px", padding: "0 4px",
+  },
+  filtroTexto: { fontSize: "11px", color: "rgba(200,230,180,0.45)" },
+  filtroBtn: {
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid rgba(127,191,90,0.25)",
+    borderRadius: "999px",
+    padding: "6px 12px",
+    color: "#7fbf5a",
+    fontSize: "11px",
+    fontWeight: "700",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    flexShrink: 0,
+  },
+  apoyoTag: {
+    marginLeft: "6px",
+    fontSize: "9px",
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
+    color: "#5a9bd4",
+    border: "1px solid rgba(90,155,212,0.35)",
+    borderRadius: "999px",
+    padding: "1px 6px",
+    fontWeight: "700",
+  },
   lista: { display: "flex", flexDirection: "column", gap: "10px", marginBottom: "20px" },
   cortadorCard: {
     background: "rgba(255,255,255,0.04)",
