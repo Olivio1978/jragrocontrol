@@ -559,7 +559,7 @@ export default function Cosecha() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={styles.headerIcon}>🧺</div>
-            <div style={styles.version}>v0.8.2</div>
+            <div style={styles.version}>v0.8.3</div>
             <button onClick={() => supabase.auth.signOut()} style={styles.logoutLink}>
               Salir
             </button>
