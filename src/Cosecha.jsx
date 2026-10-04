@@ -1,4 +1,8 @@
-// ============ JR AGROCONTROL — Cosecha.jsx v0.8.4 ============
+// ============ JR AGROCONTROL — Cosecha.jsx v0.8.5 ============
+// v0.8.5: en la pestaña Día, el selector para asignar túnel ahora
+// incluye al personal de apoyo y no solo a los cortadores de planta.
+// Un apoyo también necesita túnel asignado para que sus cubetas queden
+// ubicadas en el sector correcto.
 // v0.8.4: personal de apoyo al corte. En pico de cosecha se jala gente
 // de labores, y al final de temporada todos andan limpiando túneles.
 // Antes la lista solo mostraba a quienes tienen tipo de empleo "Corte",
@@ -586,7 +590,7 @@ export default function Cosecha() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={styles.headerIcon}>🧺</div>
-            <div style={styles.version}>v0.8.4</div>
+            <div style={styles.version}>v0.8.5</div>
             <button onClick={() => supabase.auth.signOut()} style={styles.logoutLink}>
               Salir
             </button>
@@ -701,6 +705,15 @@ export default function Cosecha() {
                               {cortadores.map((c) => (
                                 <option key={c.id} value={c.id}>{c.nombre_completo}</option>
                               ))}
+                              {apoyos.length > 0 && (
+                                <optgroup label="Personal de apoyo">
+                                  {apoyos.map((a) => (
+                                    <option key={a.id} value={a.id}>
+                                      {a.nombre_completo} ({a.tipos_empleo?.nombre})
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
                             </select>
                           </div>
                         );
