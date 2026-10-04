@@ -1,4 +1,17 @@
-// ============ JR AGROCONTROL — Cosecha.jsx v0.8.5 ============
+// ============ JR AGROCONTROL — Cosecha.jsx v0.8.6 ============
+// v0.8.6: captura por sector y corrección por tipo de cubeta.
+//
+// Al inicio y al final de temporada no hay túneles asignados: los
+// cortadores entran por surco al que esté libre, y lo único confiable
+// es el sector. Por eso, después de abrir el día, el encargado define
+// cómo se captura:
+//   por túnel  — cuando ya cada quien tiene el suyo
+//   por sector — se elige con qué sector arranca el recorrido y cada
+//                cortador se mueve al siguiente conforme avisa
+//
+// También se agrega un botón de deshacer por cada tipo de cubeta: antes
+// solo se podía corregir exportación, y un toque de más en proceso no
+// tenía arreglo desde la pantalla.
 // v0.8.5: en la pestaña Día, el selector para asignar túnel ahora
 // incluye al personal de apoyo y no solo a los cortadores de planta.
 // Un apoyo también necesita túnel asignado para que sus cubetas queden
@@ -152,7 +165,11 @@ export default function Cosecha() {
   const [viaje, setViaje] = useState(null);
   const [registros, setRegistros] = useState([]);     // registros del viaje abierto
   const [registrosDia, setRegistrosDia] = useState([]); // todos los del día (captura directa)
-  const [tunelElegido, setTunelElegido] = useState({}); // { cortadorId: tunelId }
+  const [tunelElegido, setTunelElegido] = useState({});       // { cortadorId: tunelId }
+  const [sectorPorCortador, setSectorPorCortador] = useState({}); // { cortadorId: sectorId }
+  const [selectorTunel, setSelectorTunel] = useState({});     // { cortadorId: true }
+  const [modoElegido, setModoElegido] = useState("sector");   // formulario de la pestaña Día
+  const [sectorInicio, setSectorInicio] = useState("");
 
   // ---- UI ----
   const [pestana, setPestana] = useState("dia");
@@ -249,11 +266,13 @@ export default function Cosecha() {
     if (!rid) return null;
     const { data } = await supabase
       .from("cosecha_dias")
-      .select("id, fecha, estado, modalidad")
+      .select("id, fecha, estado, modalidad, modo_ubicacion, sector_inicio_id")
       .eq("rancho_id", rid)
       .eq("fecha", fecha)
       .maybeSingle();
     setDia(data || null);
+    if (data?.modo_ubicacion) setModoElegido(data.modo_ubicacion);
+    if (data?.sector_inicio_id) setSectorInicio(data.sector_inicio_id);
     return data || null;
   };
 
@@ -352,7 +371,7 @@ export default function Cosecha() {
 
     const { data: regs } = await supabase
       .from("cosecha_registros")
-      .select("id, cortador_id, tunel_id, tipo, cantidad, registrado_en")
+      .select("id, cortador_id, tunel_id, sector_id, tipo, cantidad, registrado_en")
       .eq("viaje_id", v.id)
       .eq("anulado", false);
 
@@ -366,7 +385,7 @@ export default function Cosecha() {
     if (!diaId) { setRegistrosDia([]); return; }
     const { data } = await supabase
       .from("cosecha_registros")
-      .select("id, cortador_id, tunel_id, tipo, cantidad, registrado_en, viaje_id")
+      .select("id, cortador_id, tunel_id, sector_id, tipo, cantidad, registrado_en, viaje_id")
       .eq("cosecha_dia_id", diaId)
       .eq("anulado", false);
     setRegistrosDia(data || []);
@@ -393,6 +412,24 @@ export default function Cosecha() {
     if (error) { setError(error.message); return; }
     await cargarDia();
     setAviso("Día abierto. Ya se puede registrar corte.");
+  };
+
+  const definirModo = async () => {
+    if (!dia?.id) return;
+    setOcupado("modo"); setError(""); setAviso("");
+    const { error } = await supabase.rpc("fn_definir_modo_captura", {
+      p_cosecha_dia_id: dia.id,
+      p_modo: modoElegido,
+      p_sector_inicio: modoElegido === "sector" ? sectorInicio || null : null,
+    });
+    setOcupado(null);
+    if (error) { setError(error.message); return; }
+    await cargarDia();
+    setAviso(
+      modoElegido === "sector"
+        ? "Captura por sector. Todos arrancan en el sector elegido y se mueven conforme avisen."
+        : "Captura por túnel. Cada cubeta se registra contra el túnel del cortador."
+    );
   };
 
   const asignarTunel = async (tunelId, cortadorId) => {
@@ -442,9 +479,18 @@ export default function Cosecha() {
       return;
     }
 
-    const tunelId = tunelElegido[cortadorId] || asignaciones[cortadorId]?.[0];
-    if (!tunelId) {
-      setError("Ese cortador no tiene túnel asignado. Elige uno en la lista.");
+    // Por sector: solo se guarda de qué sector salió la fruta.
+    // Por túnel: se guarda el túnel y el sector se deduce en la base.
+    const porSector = dia.modo_ubicacion === "sector";
+    const tunelId = tunelElegido[cortadorId] || asignaciones[cortadorId]?.[0] || null;
+    const sectorId = sectorPorCortador[cortadorId] || dia.sector_inicio_id || null;
+
+    if (porSector && !sectorId) {
+      setError("Elige el sector en el que está cortando.");
+      return;
+    }
+    if (!porSector && !tunelId) {
+      setError("Ese cortador no tiene túnel asignado. Elige uno en su tarjeta.");
       return;
     }
 
@@ -456,12 +502,13 @@ export default function Cosecha() {
       .insert({
         cosecha_dia_id: dia.id,
         cortador_id: cortadorId,
-        tunel_id: tunelId,
+        tunel_id: porSector ? null : tunelId,
+        sector_id: porSector ? sectorId : null,
         tipo,
         cantidad: 1,
         viaje_id: viaje?.id || null,
       })
-      .select("id, cortador_id, tunel_id, tipo, cantidad, registrado_en, viaje_id")
+      .select("id, cortador_id, tunel_id, sector_id, tipo, cantidad, registrado_en, viaje_id")
       .single();
 
     setOcupado(null);
@@ -590,7 +637,7 @@ export default function Cosecha() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={styles.headerIcon}>🧺</div>
-            <div style={styles.version}>v0.8.5</div>
+            <div style={styles.version}>v0.8.6</div>
             <button onClick={() => supabase.auth.signOut()} style={styles.logoutLink}>
               Salir
             </button>
@@ -673,6 +720,63 @@ export default function Cosecha() {
 
             {dia && (
               <>
+                {/* Modo de captura del día */}
+                <div style={styles.card}>
+                  <div style={styles.cardTitulo}>¿Cómo se captura hoy?</div>
+                  <p style={styles.ayuda}>
+                    Cuando cada cortador tiene su túnel, conviene registrar por
+                    túnel. Al inicio y al final de temporada entran por surco al
+                    que esté libre, y ahí lo confiable es el sector.
+                  </p>
+
+                  <div style={styles.modoRow}>
+                    <button
+                      onClick={() => setModoElegido("tunel")}
+                      style={{ ...styles.modoBtn, ...(modoElegido === "tunel" ? styles.modoBtnActivo : {}) }}
+                    >
+                      Por túnel
+                    </button>
+                    <button
+                      onClick={() => setModoElegido("sector")}
+                      style={{ ...styles.modoBtn, ...(modoElegido === "sector" ? styles.modoBtnActivo : {}) }}
+                    >
+                      Por sector
+                    </button>
+                  </div>
+
+                  {modoElegido === "sector" && (
+                    <div style={{ marginTop: "12px" }}>
+                      <label style={styles.label}>SECTOR CON EL QUE ARRANCA EL RECORRIDO</label>
+                      <select
+                        value={sectorInicio}
+                        onChange={(e) => setSectorInicio(e.target.value)}
+                        style={styles.select}
+                      >
+                        <option value="">Selecciona…</option>
+                        {sectores.map((s) => (
+                          <option key={s.id} value={s.id}>{s.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={definirModo}
+                    disabled={ocupado === "modo" || (modoElegido === "sector" && !sectorInicio)}
+                    style={{ ...styles.guardarBtn, marginTop: "14px" }}
+                  >
+                    {ocupado === "modo" ? "Guardando…" : "Guardar modo de captura"}
+                  </button>
+
+                  {dia.modo_ubicacion && (
+                    <p style={{ ...styles.ayuda, marginTop: "10px", marginBottom: 0, color: "#7fbf5a" }}>
+                      Hoy se captura por {dia.modo_ubicacion === "sector" ? "sector" : "túnel"}
+                      {dia.sector_inicio_id &&
+                        `, arrancando en ${sectores.find((s) => s.id === dia.sector_inicio_id)?.nombre || ""}`}.
+                    </p>
+                  )}
+                </div>
+
                 {/* Asignación de túneles */}
                 <div style={styles.card}>
                   <div style={styles.cardTitulo}>Túneles por cortador</div>
@@ -799,7 +903,14 @@ export default function Cosecha() {
               </div>
             )}
 
-            {dia && dia.estado !== "cerrado" && (
+            {dia && dia.estado !== "cerrado" && !dia.modo_ubicacion && (
+              <div style={styles.avisoRestriccion}>
+                Falta definir cómo se captura hoy. El encargado lo elige en la
+                pestaña Día: por túnel o por sector.
+              </div>
+            )}
+
+            {dia && dia.estado !== "cerrado" && dia.modo_ubicacion && (
               <>
                 {/* Captura directa: sin carretillero */}
                 {modoDirecto && (
@@ -880,9 +991,19 @@ export default function Cosecha() {
                     <div style={styles.lista}>
                       {misCortadores.map((c) => {
                         const conteo = conteoPorCortador[c.id] || { exportacion: 0, proceso: 0 };
+                        const porSector = dia.modo_ubicacion === "sector";
+
                         const susTuneles = asignaciones[c.id] || [];
                         const tunelActivo = tunelElegido[c.id] || susTuneles[0] || "";
                         const tunelInfo = tuneles.find((t) => t.id === tunelActivo);
+
+                        const sectorActivo = sectorPorCortador[c.id] || dia.sector_inicio_id || "";
+                        const sectorInfo = sectores.find((s) => s.id === sectorActivo);
+
+                        const abierto = !!selectorTunel[c.id];
+                        const ubicacion = porSector
+                          ? (sectorInfo ? sectorInfo.nombre : "Elige el sector")
+                          : (tunelInfo ? `${tunelInfo.sector} · Túnel ${tunelInfo.numero}` : "Sin túnel asignado");
 
                         return (
                           <div key={c.id} style={styles.cortadorCard}>
@@ -901,9 +1022,15 @@ export default function Cosecha() {
                                     )}
                                   </div>
                                   <div style={styles.empleadoTipo}>
-                                    {tunelInfo
-                                      ? `${tunelInfo.sector} · Túnel ${tunelInfo.numero}`
-                                      : "Sin túnel asignado"}
+                                    {ubicacion}
+                                    {!porSector && (
+                                      <button
+                                        onClick={() => setSelectorTunel((p) => ({ ...p, [c.id]: !abierto }))}
+                                        style={styles.cambiarLink}
+                                      >
+                                        {abierto ? "cerrar" : "cambiar"}
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -914,11 +1041,35 @@ export default function Cosecha() {
                               </div>
                             </div>
 
-                            {/* Selector de túnel: necesario cuando trabaja en varios */}
-                            {(susTuneles.length > 1 || susTuneles.length === 0) && (
+                            {/* Captura por sector: se cambia cuando el cortador avisa */}
+                            {porSector && sectores.length > 1 && (
+                              <div style={styles.sectorChips}>
+                                {sectores.map((s) => {
+                                  const activo = s.id === sectorActivo;
+                                  return (
+                                    <button
+                                      key={s.id}
+                                      onClick={() => setSectorPorCortador((p) => ({ ...p, [c.id]: s.id }))}
+                                      style={{
+                                        ...styles.sectorChip,
+                                        ...(activo ? styles.sectorChipActivo : {}),
+                                      }}
+                                    >
+                                      {s.nombre}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {/* Captura por túnel: el selector solo aparece al pedirlo */}
+                            {!porSector && (abierto || !tunelInfo) && (
                               <select
                                 value={tunelActivo}
-                                onChange={(e) => setTunelElegido((p) => ({ ...p, [c.id]: e.target.value }))}
+                                onChange={(e) => {
+                                  setTunelElegido((p) => ({ ...p, [c.id]: e.target.value }));
+                                  setSelectorTunel((p) => ({ ...p, [c.id]: false }));
+                                }}
                                 style={{ ...styles.select, fontSize: "12px", padding: "7px 10px", marginBottom: "8px" }}
                               >
                                 <option value="">¿En qué túnel está cortando?</option>
@@ -939,6 +1090,14 @@ export default function Cosecha() {
                                 + Exportación
                               </button>
                               <button
+                                onClick={() => deshacerUltima(c.id, "cubeta_exportacion")}
+                                disabled={ocupado === "undo" + c.id || conteo.exportacion === 0}
+                                style={{ ...styles.btnDeshacer, borderColor: "rgba(127,191,90,0.4)", color: "#7fbf5a", opacity: conteo.exportacion === 0 ? 0.3 : 1 }}
+                                title="Quitar la última cubeta de exportación"
+                              >
+                                ↶
+                              </button>
+                              <button
                                 onClick={() => registrarCubeta(c.id, "cubeta_proceso")}
                                 disabled={ocupado === c.id + "cubeta_proceso"}
                                 style={{ ...styles.btnCubeta, borderColor: "#e8a23d", color: "#e8a23d" }}
@@ -946,10 +1105,10 @@ export default function Cosecha() {
                                 + Proceso
                               </button>
                               <button
-                                onClick={() => deshacerUltima(c.id, "cubeta_exportacion")}
-                                disabled={ocupado === "undo" + c.id || conteo.exportacion + conteo.proceso === 0}
-                                style={styles.btnDeshacer}
-                                title="Deshacer la última cubeta de exportación"
+                                onClick={() => deshacerUltima(c.id, "cubeta_proceso")}
+                                disabled={ocupado === "undo" + c.id || conteo.proceso === 0}
+                                style={{ ...styles.btnDeshacer, borderColor: "rgba(232,162,61,0.4)", color: "#e8a23d", opacity: conteo.proceso === 0 ? 0.3 : 1 }}
+                                title="Quitar la última cubeta de proceso"
                               >
                                 ↶
                               </button>
@@ -1126,17 +1285,48 @@ const styles = {
   avatar: { width: "40px", height: "40px", borderRadius: "999px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: "700", flexShrink: 0 },
   empleadoNombre: { fontSize: "14px", fontWeight: "600", color: "#e8f5e0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   empleadoTipo: { fontSize: "11px", marginTop: "2px", color: "rgba(200,230,180,0.45)" },
-  botonesCubeta: { display: "flex", gap: "8px" },
+  botonesCubeta: { display: "flex", gap: "6px" },
+  modoRow: { display: "flex", gap: "8px" },
+  modoBtn: {
+    flex: 1, padding: "12px", borderRadius: "12px",
+    border: "1.5px solid rgba(127,191,90,0.2)",
+    background: "rgba(255,255,255,0.03)",
+    color: "rgba(200,230,180,0.5)",
+    fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit",
+  },
+  modoBtnActivo: {
+    border: "1.5px solid #7fbf5a",
+    background: "rgba(127,191,90,0.15)",
+    color: "#7fbf5a",
+  },
+  sectorChips: { display: "flex", gap: "6px", marginBottom: "8px", flexWrap: "wrap" },
+  sectorChip: {
+    padding: "7px 14px", borderRadius: "999px",
+    border: "1.5px solid rgba(127,191,90,0.2)",
+    background: "rgba(255,255,255,0.03)",
+    color: "rgba(200,230,180,0.5)",
+    fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit",
+  },
+  sectorChipActivo: {
+    border: "1.5px solid #7fbf5a",
+    background: "rgba(127,191,90,0.18)",
+    color: "#7fbf5a",
+  },
+  cambiarLink: {
+    background: "none", border: "none", padding: "0 0 0 8px",
+    color: "#7fbf5a", fontSize: "11px", textDecoration: "underline",
+    cursor: "pointer", fontFamily: "inherit",
+  },
   btnCubeta: {
-    flex: 1, padding: "14px 8px", borderRadius: "12px",
+    flex: 1, padding: "14px 4px", borderRadius: "12px",
     border: "1.5px solid", background: "rgba(255,255,255,0.03)",
     fontSize: "14px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit",
   },
   btnDeshacer: {
-    width: "48px", padding: "14px 0", borderRadius: "12px",
+    width: "46px", flexShrink: 0, padding: "14px 0", borderRadius: "12px",
     border: "1.5px solid rgba(255,255,255,0.15)",
     background: "rgba(255,255,255,0.03)",
-    color: "rgba(200,230,180,0.6)", fontSize: "16px", cursor: "pointer", fontFamily: "inherit",
+    fontSize: "16px", cursor: "pointer", fontFamily: "inherit",
   },
   viajeBox: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
