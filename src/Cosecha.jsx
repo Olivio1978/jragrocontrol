@@ -1,4 +1,10 @@
-// ============ JR AGROCONTROL — Cosecha.jsx v0.8.2 ============
+// ============ JR AGROCONTROL — Cosecha.jsx v0.8.3 ============
+// v0.8.3: captura directa, sin carretillero. Al inicio de temporada no
+// siempre hay carretillero: el cortador entrega sus cubetas directo al
+// encargado. Antes la pantalla exigía abrir un viaje y no dejaba
+// registrar nada. Ahora, si el rancho no usa carretillero o no hay
+// ninguno con asistencia, los botones capturan directo contra el día y
+// el conteo que se muestra es el acumulado de la jornada.
 // v0.8.2: se agrega la pantalla de inicio de sesión y el botón "Salir",
 // con el mismo patrón que el resto de los módulos (Asistencia, Compras).
 // Antes, al entrar sin sesión, este módulo solo mostraba un mensaje de
@@ -129,7 +135,8 @@ export default function Cosecha() {
   // ---- Corte ----
   const [carretilleroId, setCarretilleroId] = useState(null);
   const [viaje, setViaje] = useState(null);
-  const [registros, setRegistros] = useState([]);  // registros del viaje abierto
+  const [registros, setRegistros] = useState([]);     // registros del viaje abierto
+  const [registrosDia, setRegistrosDia] = useState([]); // todos los del día (captura directa)
   const [tunelElegido, setTunelElegido] = useState({}); // { cortadorId: tunelId }
 
   // ---- UI ----
@@ -332,6 +339,19 @@ export default function Cosecha() {
 
   useEffect(() => { cargarViaje(); }, [carretilleroId, dia?.id]);
 
+  // ---- 9.b Registros del día completo (base de la captura directa) ----
+  const cargarRegistrosDia = async (diaId = dia?.id) => {
+    if (!diaId) { setRegistrosDia([]); return; }
+    const { data } = await supabase
+      .from("cosecha_registros")
+      .select("id, cortador_id, tunel_id, tipo, cantidad, registrado_en, viaje_id")
+      .eq("cosecha_dia_id", diaId)
+      .eq("anulado", false);
+    setRegistrosDia(data || []);
+  };
+
+  useEffect(() => { cargarRegistrosDia(); }, [dia?.id]);
+
   // Si el usuario ES el carretillero, se preselecciona a sí mismo
   useEffect(() => {
     if (usuarioActual?.rol !== "carretillero" || carretilleroId) return;
@@ -393,7 +413,12 @@ export default function Cosecha() {
   };
 
   const registrarCubeta = async (cortadorId, tipo) => {
-    if (!viaje) { setError("Abre un viaje antes de registrar cubetas."); return; }
+    // Con carretillero, la cubeta pertenece a un viaje. Sin carretillero,
+    // el encargado la recibe directo y se registra contra el día.
+    if (!modoDirecto && !viaje) {
+      setError("Abre un viaje antes de registrar cubetas.");
+      return;
+    }
 
     const tunelId = tunelElegido[cortadorId] || asignaciones[cortadorId]?.[0];
     if (!tunelId) {
@@ -412,18 +437,20 @@ export default function Cosecha() {
         tunel_id: tunelId,
         tipo,
         cantidad: 1,
-        viaje_id: viaje.id,
+        viaje_id: viaje?.id || null,
       })
-      .select("id, cortador_id, tunel_id, tipo, cantidad, registrado_en")
+      .select("id, cortador_id, tunel_id, tipo, cantidad, registrado_en, viaje_id")
       .single();
 
     setOcupado(null);
     if (error) { setError(error.message); return; }
-    setRegistros((prev) => [...prev, data]);
+    setRegistrosDia((prev) => [...prev, data]);
+    if (viaje) setRegistros((prev) => [...prev, data]);
   };
 
   const deshacerUltima = async (cortadorId, tipo) => {
-    const propias = registros
+    const fuente = modoDirecto ? registrosDia : registros;
+    const propias = fuente
       .filter((r) => r.cortador_id === cortadorId && r.tipo === tipo)
       .sort((a, b) => new Date(b.registrado_en) - new Date(a.registrado_en));
 
@@ -444,6 +471,7 @@ export default function Cosecha() {
     setOcupado(null);
     if (error) { setError(error.message); return; }
     setRegistros((prev) => prev.filter((r) => r.id !== ultima.id));
+    setRegistrosDia((prev) => prev.filter((r) => r.id !== ultima.id));
   };
 
   const cerrarViaje = async () => {
@@ -461,24 +489,33 @@ export default function Cosecha() {
 
   // ============ Derivados ============
 
+  // Sin carretillero configurado, o sin ninguno con asistencia hoy, la
+  // captura es directa: el cortador entrega al encargado y no hay viajes.
+  const modoDirecto = useMemo(() => {
+    if (parametros && parametros.usa_carretillero === false) return true;
+    return carretilleros.length === 0;
+  }, [parametros, carretilleros]);
+
+  const registrosActivos = modoDirecto ? registrosDia : registros;
+
   const conteoPorCortador = useMemo(() => {
     const mapa = {};
-    registros.forEach((r) => {
+    registrosActivos.forEach((r) => {
       if (!mapa[r.cortador_id]) mapa[r.cortador_id] = { exportacion: 0, proceso: 0 };
       if (r.tipo === "cubeta_exportacion") mapa[r.cortador_id].exportacion += r.cantidad;
       if (r.tipo === "cubeta_proceso") mapa[r.cortador_id].proceso += r.cantidad;
     });
     return mapa;
-  }, [registros]);
+  }, [registrosActivos]);
 
   const totalViaje = useMemo(() => {
     let exp = 0, pro = 0;
-    registros.forEach((r) => {
+    registrosActivos.forEach((r) => {
       if (r.tipo === "cubeta_exportacion") exp += r.cantidad;
       if (r.tipo === "cubeta_proceso") pro += r.cantidad;
     });
     return { exp, pro, total: exp + pro };
-  }, [registros]);
+  }, [registrosActivos]);
 
   // Cortadores que puede atender el carretillero según su zona
   const misCortadores = useMemo(() => {
@@ -724,7 +761,29 @@ export default function Cosecha() {
 
             {dia && dia.estado !== "cerrado" && (
               <>
+                {/* Captura directa: sin carretillero */}
+                {modoDirecto && (
+                  <div style={styles.card}>
+                    <div style={styles.cardTitulo}>Captura directa</div>
+                    <p style={styles.ayuda}>
+                      {parametros?.usa_carretillero === false
+                        ? "Este rancho trabaja sin carretillero: el cortador entrega sus cubetas directo al encargado."
+                        : "Hoy no hay carretillero con asistencia, así que las cubetas se registran directo al recibirlas."}
+                    </p>
+                    <div style={styles.viajeBox}>
+                      <div>
+                        <div style={styles.viajeNumero}>Cubetas del día</div>
+                        <div style={styles.chipLabel}>
+                          {totalViaje.exp} exportación · {totalViaje.pro} proceso
+                        </div>
+                      </div>
+                      <div style={styles.viajeTotal}>{totalViaje.total}</div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Carretillero y viaje */}
+                {!modoDirecto && (
                 <div style={styles.card}>
                   <label style={styles.label}>CARRETILLERO</label>
                   <select
@@ -738,14 +797,6 @@ export default function Cosecha() {
                       <option key={c.id} value={c.id}>{c.nombre_completo}</option>
                     ))}
                   </select>
-
-                  {carretilleros.length === 0 && (
-                    <p style={{ ...styles.ayuda, color: "#e8a23d" }}>
-                      No hay carretilleros con asistencia hoy. Si en este rancho
-                      el cortador entrega directo al empaque, captura desde la
-                      pestaña Empaque.
-                    </p>
-                  )}
 
                   {carretilleroId && !viaje && (
                     <button onClick={abrirViaje} disabled={ocupado === "viaje"} style={{ ...styles.guardarBtn, marginTop: "14px" }}>
@@ -765,9 +816,10 @@ export default function Cosecha() {
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Lista de cortadores */}
-                {viaje && (
+                {(viaje || modoDirecto) && (
                   <>
                     <div style={styles.lista}>
                       {misCortadores.map((c) => {
@@ -846,22 +898,34 @@ export default function Cosecha() {
 
                     {misCortadores.length === 0 && (
                       <p style={styles.empty}>
-                        No hay cortadores en tu zona con asistencia de hoy.
+                        {modoDirecto
+                          ? "No hay cortadores con asistencia registrada hoy. Pasa lista en el módulo de Asistencia."
+                          : "No hay cortadores en tu zona con asistencia de hoy."}
                       </p>
                     )}
 
-                    <button
-                      onClick={cerrarViaje}
-                      disabled={ocupado === "cerrar" || totalViaje.total === 0}
-                      style={{
-                        ...styles.guardarBtn,
-                        opacity: totalViaje.total === 0 ? 0.4 : 1,
-                      }}
-                    >
-                      {ocupado === "cerrar"
-                        ? "Cerrando…"
-                        : `Cerrar viaje y llevar al empaque (${totalViaje.total} cubetas)`}
-                    </button>
+                    {!modoDirecto && (
+                      <button
+                        onClick={cerrarViaje}
+                        disabled={ocupado === "cerrar" || totalViaje.total === 0}
+                        style={{
+                          ...styles.guardarBtn,
+                          opacity: totalViaje.total === 0 ? 0.4 : 1,
+                        }}
+                      >
+                        {ocupado === "cerrar"
+                          ? "Cerrando…"
+                          : `Cerrar viaje y llevar al empaque (${totalViaje.total} cubetas)`}
+                      </button>
+                    )}
+
+                    {modoDirecto && (
+                      <p style={styles.ayuda}>
+                        Cada cubeta queda guardada al momento de registrarla. Al
+                        terminar la jornada, el encargado cierra el día desde la
+                        pestaña Día.
+                      </p>
+                    )}
                   </>
                 )}
               </>
