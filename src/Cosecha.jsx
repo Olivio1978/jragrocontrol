@@ -1,4 +1,15 @@
-// ============ JR AGROCONTROL — Cosecha.jsx v0.8.6 ============
+// ============ JR AGROCONTROL — Cosecha.jsx v0.8.7 ============
+// v0.8.7: el modo de corte es del sector, no del día. Un sector puede
+// estar en plena producción con túneles asignados mientras otro apenas
+// arranca y se corta por surco; eso convive durante semanas, así que
+// no puede decidirse cada mañana.
+//
+// El ciclo normal de un sector es surco al inicio, túnel en plena
+// producción y surco otra vez al final. Cada cambio queda con su fecha.
+//
+// En la captura, la tarjeta se adapta al sector donde está el cortador:
+// si ese sector va por túnel, pide el túnel; si va por surco, basta con
+// el sector.
 // v0.8.6: captura por sector y corrección por tipo de cubeta.
 //
 // Al inicio y al final de temporada no hay túneles asignados: los
@@ -168,8 +179,7 @@ export default function Cosecha() {
   const [tunelElegido, setTunelElegido] = useState({});       // { cortadorId: tunelId }
   const [sectorPorCortador, setSectorPorCortador] = useState({}); // { cortadorId: sectorId }
   const [selectorTunel, setSelectorTunel] = useState({});     // { cortadorId: true }
-  const [modoElegido, setModoElegido] = useState("sector");   // formulario de la pestaña Día
-  const [sectorInicio, setSectorInicio] = useState("");
+  const [modoSector, setModoSector] = useState({});           // { sectorId: 'surco' | 'tunel' }
 
   // ---- UI ----
   const [pestana, setPestana] = useState("dia");
@@ -243,21 +253,25 @@ export default function Cosecha() {
 
     supabase
       .from("tuneles")
-      .select("id, numero, metros_lineales, sectores!inner(id, nombre, rancho_id)")
+      .select("id, numero, metros_lineales, sectores!inner(id, nombre, rancho_id, modo_corte)")
       .eq("sectores.rancho_id", ranchoId)
       .eq("activo", true)
       .order("numero")
       .then(({ data, error }) => {
         if (error) { setError(error.message); return; }
-        setTuneles(
-          (data || []).map((t) => ({
-            id: t.id,
-            numero: t.numero,
-            metros: t.metros_lineales,
-            sectorId: t.sectores.id,
-            sector: t.sectores.nombre,
-          }))
-        );
+        const lista = (data || []).map((t) => ({
+          id: t.id,
+          numero: t.numero,
+          metros: t.metros_lineales,
+          sectorId: t.sectores.id,
+          sector: t.sectores.nombre,
+          modoCorte: t.sectores.modo_corte,
+        }));
+        setTuneles(lista);
+
+        const modos = {};
+        lista.forEach((t) => { modos[t.sectorId] = t.modoCorte; });
+        setModoSector(modos);
       });
   }, [ranchoId]);
 
@@ -266,13 +280,11 @@ export default function Cosecha() {
     if (!rid) return null;
     const { data } = await supabase
       .from("cosecha_dias")
-      .select("id, fecha, estado, modalidad, modo_ubicacion, sector_inicio_id")
+      .select("id, fecha, estado, modalidad")
       .eq("rancho_id", rid)
       .eq("fecha", fecha)
       .maybeSingle();
     setDia(data || null);
-    if (data?.modo_ubicacion) setModoElegido(data.modo_ubicacion);
-    if (data?.sector_inicio_id) setSectorInicio(data.sector_inicio_id);
     return data || null;
   };
 
@@ -414,21 +426,23 @@ export default function Cosecha() {
     setAviso("Día abierto. Ya se puede registrar corte.");
   };
 
-  const definirModo = async () => {
-    if (!dia?.id) return;
-    setOcupado("modo"); setError(""); setAviso("");
-    const { error } = await supabase.rpc("fn_definir_modo_captura", {
-      p_cosecha_dia_id: dia.id,
-      p_modo: modoElegido,
-      p_sector_inicio: modoElegido === "sector" ? sectorInicio || null : null,
+  const cambiarModoSector = async (sectorId, modo, nombre) => {
+    setOcupado(sectorId); setError(""); setAviso("");
+    const { error } = await supabase.rpc("fn_cambiar_modo_sector", {
+      p_sector_id: sectorId,
+      p_modo: modo,
+      p_desde: fecha,
+      p_motivo: modo === "tunel"
+        ? "Sector en produccion: se asignan tuneles"
+        : "Sector en surco libre",
     });
     setOcupado(null);
     if (error) { setError(error.message); return; }
-    await cargarDia();
+    setModoSector((p) => ({ ...p, [sectorId]: modo }));
     setAviso(
-      modoElegido === "sector"
-        ? "Captura por sector. Todos arrancan en el sector elegido y se mueven conforme avisen."
-        : "Captura por túnel. Cada cubeta se registra contra el túnel del cortador."
+      modo === "tunel"
+        ? `${nombre} pasa a corte por túnel. Queda así hasta nuevo aviso.`
+        : `${nombre} pasa a corte por surco: las cubetas se registran solo con el sector.`
     );
   };
 
@@ -479,18 +493,18 @@ export default function Cosecha() {
       return;
     }
 
-    // Por sector: solo se guarda de qué sector salió la fruta.
-    // Por túnel: se guarda el túnel y el sector se deduce en la base.
-    const porSector = dia.modo_ubicacion === "sector";
+    // El sector donde está el cortador decide cómo se registra:
+    // en modo túnel se guarda el túnel; en modo surco basta el sector.
+    const sectorId = sectorPorCortador[cortadorId] || sectores[0]?.id || null;
+    const porSector = modoSector[sectorId] !== "tunel";
     const tunelId = tunelElegido[cortadorId] || asignaciones[cortadorId]?.[0] || null;
-    const sectorId = sectorPorCortador[cortadorId] || dia.sector_inicio_id || null;
 
-    if (porSector && !sectorId) {
+    if (!sectorId) {
       setError("Elige el sector en el que está cortando.");
       return;
     }
     if (!porSector && !tunelId) {
-      setError("Ese cortador no tiene túnel asignado. Elige uno en su tarjeta.");
+      setError("Ese sector se corta por túnel. Elige el túnel en su tarjeta.");
       return;
     }
 
@@ -637,7 +651,7 @@ export default function Cosecha() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={styles.headerIcon}>🧺</div>
-            <div style={styles.version}>v0.8.6</div>
+            <div style={styles.version}>v0.8.7</div>
             <button onClick={() => supabase.auth.signOut()} style={styles.logoutLink}>
               Salir
             </button>
@@ -720,61 +734,39 @@ export default function Cosecha() {
 
             {dia && (
               <>
-                {/* Modo de captura del día */}
+                {/* Modo de corte de cada sector */}
                 <div style={styles.card}>
-                  <div style={styles.cardTitulo}>¿Cómo se captura hoy?</div>
+                  <div style={styles.cardTitulo}>Cómo se corta cada sector</div>
                   <p style={styles.ayuda}>
-                    Cuando cada cortador tiene su túnel, conviene registrar por
-                    túnel. Al inicio y al final de temporada entran por surco al
-                    que esté libre, y ahí lo confiable es el sector.
+                    Un sector arranca por surco, pasa a túnel cuando entra en
+                    producción y regresa a surco al final. El cambio se queda
+                    hasta nuevo aviso y se puede tener un sector en cada modo.
                   </p>
 
-                  <div style={styles.modoRow}>
-                    <button
-                      onClick={() => setModoElegido("tunel")}
-                      style={{ ...styles.modoBtn, ...(modoElegido === "tunel" ? styles.modoBtnActivo : {}) }}
-                    >
-                      Por túnel
-                    </button>
-                    <button
-                      onClick={() => setModoElegido("sector")}
-                      style={{ ...styles.modoBtn, ...(modoElegido === "sector" ? styles.modoBtnActivo : {}) }}
-                    >
-                      Por sector
-                    </button>
-                  </div>
-
-                  {modoElegido === "sector" && (
-                    <div style={{ marginTop: "12px" }}>
-                      <label style={styles.label}>SECTOR CON EL QUE ARRANCA EL RECORRIDO</label>
-                      <select
-                        value={sectorInicio}
-                        onChange={(e) => setSectorInicio(e.target.value)}
-                        style={styles.select}
-                      >
-                        <option value="">Selecciona…</option>
-                        {sectores.map((s) => (
-                          <option key={s.id} value={s.id}>{s.nombre}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={definirModo}
-                    disabled={ocupado === "modo" || (modoElegido === "sector" && !sectorInicio)}
-                    style={{ ...styles.guardarBtn, marginTop: "14px" }}
-                  >
-                    {ocupado === "modo" ? "Guardando…" : "Guardar modo de captura"}
-                  </button>
-
-                  {dia.modo_ubicacion && (
-                    <p style={{ ...styles.ayuda, marginTop: "10px", marginBottom: 0, color: "#7fbf5a" }}>
-                      Hoy se captura por {dia.modo_ubicacion === "sector" ? "sector" : "túnel"}
-                      {dia.sector_inicio_id &&
-                        `, arrancando en ${sectores.find((s) => s.id === dia.sector_inicio_id)?.nombre || ""}`}.
-                    </p>
-                  )}
+                  {sectores.map((s) => {
+                    const modo = modoSector[s.id] || "surco";
+                    return (
+                      <div key={s.id} style={styles.tunelRow}>
+                        <span style={styles.tunelNombre}>{s.nombre}</span>
+                        <div style={styles.modoRowChico}>
+                          <button
+                            onClick={() => cambiarModoSector(s.id, "surco", s.nombre)}
+                            disabled={ocupado === s.id || modo === "surco"}
+                            style={{ ...styles.sectorChip, ...(modo === "surco" ? styles.sectorChipActivo : {}) }}
+                          >
+                            Por surco
+                          </button>
+                          <button
+                            onClick={() => cambiarModoSector(s.id, "tunel", s.nombre)}
+                            disabled={ocupado === s.id || modo === "tunel"}
+                            style={{ ...styles.sectorChip, ...(modo === "tunel" ? styles.sectorChipActivo : {}) }}
+                          >
+                            Por túnel
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* Asignación de túneles */}
@@ -903,14 +895,7 @@ export default function Cosecha() {
               </div>
             )}
 
-            {dia && dia.estado !== "cerrado" && !dia.modo_ubicacion && (
-              <div style={styles.avisoRestriccion}>
-                Falta definir cómo se captura hoy. El encargado lo elige en la
-                pestaña Día: por túnel o por sector.
-              </div>
-            )}
-
-            {dia && dia.estado !== "cerrado" && dia.modo_ubicacion && (
+            {dia && dia.estado !== "cerrado" && (
               <>
                 {/* Captura directa: sin carretillero */}
                 {modoDirecto && (
@@ -991,19 +976,20 @@ export default function Cosecha() {
                     <div style={styles.lista}>
                       {misCortadores.map((c) => {
                         const conteo = conteoPorCortador[c.id] || { exportacion: 0, proceso: 0 };
-                        const porSector = dia.modo_ubicacion === "sector";
 
-                        const susTuneles = asignaciones[c.id] || [];
+                        const sectorActivo = sectorPorCortador[c.id] || sectores[0]?.id || "";
+                        const sectorInfo = sectores.find((s) => s.id === sectorActivo);
+                        const porSector = modoSector[sectorActivo] !== "tunel";
+
+                        const susTuneles = (asignaciones[c.id] || [])
+                          .filter((id) => tuneles.find((t) => t.id === id)?.sectorId === sectorActivo);
                         const tunelActivo = tunelElegido[c.id] || susTuneles[0] || "";
                         const tunelInfo = tuneles.find((t) => t.id === tunelActivo);
 
-                        const sectorActivo = sectorPorCortador[c.id] || dia.sector_inicio_id || "";
-                        const sectorInfo = sectores.find((s) => s.id === sectorActivo);
-
                         const abierto = !!selectorTunel[c.id];
                         const ubicacion = porSector
-                          ? (sectorInfo ? sectorInfo.nombre : "Elige el sector")
-                          : (tunelInfo ? `${tunelInfo.sector} · Túnel ${tunelInfo.numero}` : "Sin túnel asignado");
+                          ? (sectorInfo ? `${sectorInfo.nombre} · por surco` : "Elige el sector")
+                          : (tunelInfo ? `${tunelInfo.sector} · Túnel ${tunelInfo.numero}` : "Elige el túnel");
 
                         return (
                           <div key={c.id} style={styles.cortadorCard}>
@@ -1042,14 +1028,17 @@ export default function Cosecha() {
                             </div>
 
                             {/* Captura por sector: se cambia cuando el cortador avisa */}
-                            {porSector && sectores.length > 1 && (
+                            {sectores.length > 1 && (
                               <div style={styles.sectorChips}>
                                 {sectores.map((s) => {
                                   const activo = s.id === sectorActivo;
                                   return (
                                     <button
                                       key={s.id}
-                                      onClick={() => setSectorPorCortador((p) => ({ ...p, [c.id]: s.id }))}
+                                      onClick={() => {
+                                        setSectorPorCortador((p) => ({ ...p, [c.id]: s.id }));
+                                        setTunelElegido((p) => ({ ...p, [c.id]: "" }));
+                                      }}
                                       style={{
                                         ...styles.sectorChip,
                                         ...(activo ? styles.sectorChipActivo : {}),
@@ -1073,7 +1062,7 @@ export default function Cosecha() {
                                 style={{ ...styles.select, fontSize: "12px", padding: "7px 10px", marginBottom: "8px" }}
                               >
                                 <option value="">¿En qué túnel está cortando?</option>
-                                {tuneles.map((t) => (
+                                {tuneles.filter((t) => t.sectorId === sectorActivo).map((t) => (
                                   <option key={t.id} value={t.id}>
                                     {t.sector} · Túnel {t.numero}
                                   </option>
@@ -1300,6 +1289,7 @@ const styles = {
     color: "#7fbf5a",
   },
   sectorChips: { display: "flex", gap: "6px", marginBottom: "8px", flexWrap: "wrap" },
+  modoRowChico: { display: "flex", gap: "6px", flexShrink: 0 },
   sectorChip: {
     padding: "7px 14px", borderRadius: "999px",
     border: "1.5px solid rgba(127,191,90,0.2)",
