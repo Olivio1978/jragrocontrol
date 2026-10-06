@@ -1,4 +1,4 @@
-// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.35 ============
+// ============ JR AGROCONTROL — Fertilizaciones.jsx v0.3.37 ============
 // Módulo Fertilizaciones: recomendaciones del agrónomo, confirmación en
 // campo (con motivo si se modifica), recetas con dosis por hectárea y
 // programación por sector/semanas/días, sectores con semana fenológica,
@@ -64,6 +64,22 @@ function hace30diasFert() {
   d.setDate(d.getDate() - 30);
   const offset = d.getTimezoneOffset();
   return new Date(d.getTime() - offset * 60000).toISOString().split("T")[0];
+}
+
+// El servidor regresa máximo 1,000 filas por consulta. Si se piden todos los
+// productos de todas las recomendaciones, al crecer el historial los más
+// nuevos se cortan en silencio y la tarjeta aparece sin productos. Por eso
+// el detalle se pide solo de las recomendaciones que se van a mostrar, en
+// bloques chicos que nunca se acercan al límite.
+async function detallePorRecomendaciones(ids) {
+  const filas = [];
+  for (let i = 0; i < ids.length; i += 60) {
+    const { data, error } = await supabase.from("fertilizacion_detalle")
+      .select("*").in("fertilizacion_id", ids.slice(i, i + 60));
+    if (error) return { data: null, error };
+    filas.push(...(data || []));
+  }
+  return { data: filas, error: null };
 }
 
 // ============ ESTILOS (patrón Labores) ============
@@ -245,13 +261,12 @@ export default function Fertilizaciones() {
   // ---- 3. Datos del módulo ----
   const cargarDatos = useCallback(async () => {
     setCargando(true);
-    const [r, p, rec, rd, f, fd, m, es, rp, b, ex] = await Promise.all([
+    const [r, p, rec, rd, f, m, es, rp, b, ex] = await Promise.all([
       supabase.from("ranchos").select("id, nombre, empresa_id").order("nombre"),
       supabase.from("productos_insumos").select("id, nombre_comercial, unidad_base, costo_unitario, via_fertirriego, via_foliar, via_suelo").eq("activo", true).order("nombre_comercial"),
       supabase.from("recetas").select("*").order("nombre"),
       supabase.from("receta_detalle").select("*"),
       supabase.from("fertilizaciones").select("*").order("fecha_recomendada", { ascending: false }).limit(100),
-      supabase.from("fertilizacion_detalle").select("*"),
       supabase.from("mediciones_campo").select("*").order("fecha", { ascending: false }).limit(30),
       supabase.from("vw_estado_sectores").select("*"),
       supabase.from("receta_programacion").select("*"),
@@ -264,6 +279,8 @@ export default function Fertilizaciones() {
     setRecetas(rec.data || []);
     setRecetaDet(rd.data || []);
     setAplicaciones(f.data || []);
+    const fd = await detallePorRecomendaciones((f.data || []).map(x => x.id));
+    if (fd.error) setError(fd.error.message);
     setAplicacionDet(fd.data || []);
     setMediciones(m.data || []);
     setEstadoSectores(es.data || []);
@@ -326,8 +343,7 @@ export default function Fertilizaciones() {
 
     const ids = (fData || []).map(f => f.id);
     if (ids.length === 0) { setRepFertDet([]); setCargandoReporte(false); return; }
-    const { data: dData, error: e2 } = await supabase.from("fertilizacion_detalle")
-      .select("*").in("fertilizacion_id", ids);
+    const { data: dData, error: e2 } = await detallePorRecomendaciones(ids);
     if (e2) { setError(e2.message); setCargandoReporte(false); return; }
     setRepFertDet(dData || []);
     setCargandoReporte(false);
@@ -793,29 +809,21 @@ export default function Fertilizaciones() {
     const validas = lineasEdit.filter(l => l.producto_id && Number(l.cantidad) > 0);
     if (!validas.length) return setError("La recomendación necesita al menos un producto con cantidad.");
 
-    const originales = aplicacionDet.filter(d => d.fertilizacion_id === f.id);
-
-    // Actualizar/insertar las líneas presentes
+    // Producto realmente repetido: avisar por nombre antes de tocar la base
+    const vistos = new Set();
     for (const l of validas) {
-      if (l.id) {
-        const { error: e } = await supabase.from("fertilizacion_detalle")
-          .update({ producto_id: l.producto_id, cantidad_recomendada: Number(l.cantidad) }).eq("id", l.id);
-        if (e) return setError(`${nombreProducto(l.producto_id)}: ${e.message}`);
-      } else {
-        const { error: e } = await supabase.from("fertilizacion_detalle").insert({
-          fertilizacion_id: f.id, producto_id: l.producto_id, cantidad_recomendada: Number(l.cantidad),
-        });
-        if (e) return setError(`${nombreProducto(l.producto_id)}: ${e.message}`);
-      }
+      if (vistos.has(l.producto_id))
+        return setError(`${nombreProducto(l.producto_id)} aparece más de una vez; deja una sola línea con la cantidad total.`);
+      vistos.add(l.producto_id);
     }
 
-    // Borrar las líneas que quitaron durante la edición
-    const idsConservados = new Set(validas.filter(l => l.id).map(l => l.id));
-    const aBorrar = originales.filter(d => !idsConservados.has(d.id));
-    for (const d of aBorrar) {
-      const { error: e } = await supabase.from("fertilizacion_detalle").delete().eq("id", d.id);
-      if (e) return setError(e.message);
-    }
+    // Se reemplazan todas las líneas en una sola operación en la base:
+    // o queda todo como lo ves en pantalla, o no cambia nada.
+    const { error: e } = await supabase.rpc("fn_actualizar_lineas_recomendacion", {
+      p_fertilizacion_id: f.id,
+      p_lineas: validas.map(l => ({ producto_id: l.producto_id, cantidad: Number(l.cantidad) })),
+    });
+    if (e) return setError(e.message);
 
     avisar("Recomendación actualizada.");
     setEditando(null);
@@ -993,7 +1001,7 @@ export default function Fertilizaciones() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>💧</div>
-            <div style={S.version}>v0.3.35</div>
+            <div style={S.version}>v0.3.37</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
