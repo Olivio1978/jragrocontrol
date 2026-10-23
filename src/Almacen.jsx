@@ -1,4 +1,11 @@
-// ============ JR AGROCONTROL — Almacen.jsx v0.3.31 ============
+// ============ JR AGROCONTROL — Almacen.jsx v0.3.32 ============
+// v0.3.32: corrige traspasos que movían inventario a medias. "Enviar traspaso"
+// ahora llama a fn_crear_traspaso (valida la existencia de todos los productos
+// antes de mover cualquiera; si uno no alcanza, no se mueve nada). Se agregan:
+// ✕ para quitar un producto del formulario, botón "Descartar" para limpiar la
+// captura sin enviar, bloqueo contra doble envío, y suma automática si un
+// producto se capturó en dos renglones. El botón de la tarjeta ahora dice
+// "✖ Cancelar traspaso" (solo admin/superadmin, traspasos en tránsito).
 // v0.3.31: registro sanitario (RSCO) con 3 estados — Sin capturar / En
 // trámite / Registrado — en vez de un solo campo de texto, para no bloquear
 // productos de marcas secundarias en trámite ni confundirlos con los que
@@ -301,6 +308,7 @@ export default function Almacen({ onNavigate }) {
   const [mov, setMov] = useState({ tipo: "entrada_donacion", bodega_id: "", producto_id: "", cantidad: "", notas: "" });
   const [tras, setTras] = useState({ origen: "", destino: "", notas: "" });
   const [lineas, setLineas] = useState([{ producto_id: "", cantidad: "" }]);
+  const [enviandoTraspaso, setEnviandoTraspaso] = useState(false); // evita doble envío por doble toque
   const [confirmando, setConfirmando] = useState(null);
   const [recibidas, setRecibidas] = useState({});
 
@@ -561,33 +569,56 @@ export default function Almacen({ onNavigate }) {
     setLineas(nuevas);
   }
 
+  // v0.3.32: el traspaso se crea en UNA sola llamada a fn_crear_traspaso, que
+  // valida la existencia de TODOS los productos antes de mover cualquiera. Antes
+  // se insertaba renglón por renglón y, si uno no tenía existencia, los
+  // anteriores ya habían salido del origen y el traspaso quedaba a medias.
   async function crearTraspaso() {
+    if (enviandoTraspaso) return;
     if (!tras.origen || !tras.destino) return setError("Selecciona bodega origen y destino.");
     if (tras.origen === tras.destino) return setError("Origen y destino no pueden ser la misma bodega.");
     const validas = lineas.filter(l => l.producto_id && Number(l.cantidad) > 0);
     if (!validas.length) return setError("Agrega al menos un producto con cantidad.");
 
-    const { data: cab, error: e1 } = await supabase.from("traspasos").insert({
-      empresa_id: empresaId,
-      bodega_origen_id: tras.origen,
-      bodega_destino_id: tras.destino,
-      notas: tras.notas || null,
-      enviado_por: usuarioActual.id,
-    }).select("id").single();
-    if (e1) return setError(e1.message);
+    // Si el mismo producto se capturó en dos renglones, se suma en uno solo
+    // para que la validación de existencia compare contra el total real.
+    const porProducto = {};
+    validas.forEach(l => { porProducto[l.producto_id] = (porProducto[l.producto_id] || 0) + Number(l.cantidad); });
+    const p_productos = Object.entries(porProducto).map(([producto_id, cantidad]) => ({ producto_id, cantidad }));
 
-    for (const l of validas) {
-      const { error: e2 } = await supabase.from("traspaso_detalle").insert({
-        traspaso_id: cab.id,
-        producto_id: l.producto_id,
-        cantidad_enviada: Number(l.cantidad),
-      });
-      if (e2) return setError(`${nombreProducto(l.producto_id)}: ${e2.message}`);
-    }
+    setEnviandoTraspaso(true);
+    const { error: e } = await supabase.rpc("fn_crear_traspaso", {
+      p_bodega_origen: tras.origen,
+      p_bodega_destino: tras.destino,
+      p_notas: tras.notas || null,
+      p_enviado_por: usuarioActual.id,
+      p_productos,
+    });
+    setEnviandoTraspaso(false);
+    // Si falla, no se movió nada: el formulario se conserva para corregir y reintentar.
+    if (e) return setError(e.message);
+
     avisar("Traspaso enviado. Queda en tránsito hasta que el rancho confirme recepción.");
+    descartarTraspaso();
+    await cargarDatos();
+  }
+
+  // Limpia el formulario de captura sin enviar nada.
+  function descartarTraspaso() {
     setTras({ origen: "", destino: "", notas: "" });
     setLineas([{ producto_id: "", cantidad: "" }]);
-    await cargarDatos();
+    setBuscarProductoLinea({});
+    setMostrarBuscadorLinea(null);
+  }
+
+  // Quita un renglón del formulario (siempre deja al menos uno vacío).
+  function quitarLineaTraspaso(i) {
+    const nuevas = lineas.filter((_, idx) => idx !== i);
+    setLineas(nuevas.length ? nuevas : [{ producto_id: "", cantidad: "" }]);
+    const busq = {};
+    nuevas.forEach((_, idx) => { busq[idx] = buscarProductoLinea[idx < i ? idx : idx + 1] || ""; });
+    setBuscarProductoLinea(busq);
+    setMostrarBuscadorLinea(null);
   }
 
   function abrirConfirmacion(t) {
@@ -927,7 +958,7 @@ export default function Almacen({ onNavigate }) {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={S.headerIcon}>📦</div>
-            <div style={S.version}>v0.3.31</div>
+            <div style={S.version}>v0.3.32</div>
             <button onClick={() => supabase.auth.signOut()} style={S.btnLogout}>Salir</button>
           </div>
         </div>
@@ -1112,6 +1143,9 @@ export default function Almacen({ onNavigate }) {
                     <input style={{ ...S.select, flex: 1 }} type="number" min="0" step="0.001"
                       placeholder="Cant." value={l.cantidad}
                       onChange={e => cambiarLinea(i, "cantidad", e.target.value)} />
+                    <button type="button" title="Quitar producto" onClick={() => quitarLineaTraspaso(i)}
+                      style={{ background: "transparent", border: "1px solid rgba(224,92,92,0.4)", borderRadius: 10,
+                               color: "#e05c5c", fontSize: 16, padding: "0 12px", cursor: "pointer" }}>✕</button>
                   </div>
                 ))}
                 <button style={S.btnSecundario} onClick={() => setLineas([...lineas, { producto_id: "", cantidad: "" }])}>
@@ -1123,7 +1157,13 @@ export default function Almacen({ onNavigate }) {
                   <input style={S.select} value={tras.notas} onChange={e => setTras({ ...tras, notas: e.target.value })} />
                 </div>
 
-                <button style={S.btnPrimary} onClick={crearTraspaso}>Enviar traspaso</button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={{ ...S.btnPrimary, flex: 1, opacity: enviandoTraspaso ? 0.6 : 1 }}
+                    disabled={enviandoTraspaso} onClick={crearTraspaso}>
+                    {enviandoTraspaso ? "Enviando…" : "Enviar traspaso"}
+                  </button>
+                  <button style={{ ...S.btnSecundario, marginBottom: 16 }} onClick={descartarTraspaso}>Descartar</button>
+                </div>
               </div>
             )}
 
@@ -1181,7 +1221,7 @@ export default function Almacen({ onNavigate }) {
                         </button>
                         {esAdmin && (
                           <button style={{ ...S.btnSecundario, color: "#e05c5c", borderColor: "rgba(224,92,92,0.4)" }}
-                            onClick={() => cancelarTraspaso(t)}>Cancelar</button>
+                            onClick={() => cancelarTraspaso(t)}>✖ Cancelar traspaso</button>
                         )}
                       </div>
                     )
